@@ -11,6 +11,7 @@ import {
 import { parsePortfolioScreenshots, type ScreenshotInput } from './server/screenshotParser.ts';
 import {
   analyzePortfolioHoldings,
+  analyzeSingleSymbolOutlook,
   type HoldingAnalysisInput,
 } from './server/portfolioAnalyzer.ts';
 import {
@@ -119,6 +120,28 @@ async function startServer() {
     } catch (error) {
       console.error('Signals endpoint error:', error);
       res.status(500).json({ error: 'Failed to load research signals.' });
+    }
+  });
+
+  app.get('/api/market/ai-outlook/:symbol', async (req, res) => {
+    try {
+      const symbol = decodeURIComponent(req.params.symbol || '').trim();
+      if (!symbol) {
+        res.status(400).json({ error: 'A valid market symbol is required.' });
+        return;
+      }
+
+      const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+      const outlook = await analyzeSingleSymbolOutlook(symbol, { forceRefresh });
+      res.json(outlook);
+    } catch (error) {
+      console.error('Symbol AI outlook endpoint error:', error);
+      const message =
+        error instanceof Error ? error.message : 'Failed to generate AI outlook for symbol.';
+      const status = /no live market quote available/i.test(message) ? 404 : 500;
+      res.status(status).json({
+        error: status === 404 ? message : formatRouteError(error, message),
+      });
     }
   });
 

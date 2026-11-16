@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Area,
   Bar,
@@ -11,8 +11,25 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { ArrowDownRight, ArrowUpRight, Plus, RefreshCw, Search, Star } from 'lucide-react';
-import type { ChartRange, ChartResponse, SearchResultItem } from '../types/market';
+import {
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  CheckCircle2,
+  LineChart as LineChartIcon,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  Star,
+} from 'lucide-react';
+import type {
+  ChartRange,
+  ChartResponse,
+  SearchResultItem,
+  SymbolAiOutlook,
+} from '../types/market';
 import { formatINR, formatPercent, formatVolume } from '../utils/portfolioAnalytics';
 
 export interface ChartOverlayLevels {
@@ -61,6 +78,13 @@ export function MarketChartTerminal({
   const [searchResults, setSearchResults] = useState<SearchResultItem[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
 
+  const outlookCacheRef = useRef<Map<string, SymbolAiOutlook>>(new Map());
+  const outlookRequestIdRef = useRef(0);
+  const [outlook, setOutlook] = useState<SymbolAiOutlook | null>(null);
+  const [outlookLoading, setOutlookLoading] = useState(true);
+  const [outlookError, setOutlookError] = useState<string | null>(null);
+  const [showAiLevels, setShowAiLevels] = useState(false);
+
   const fetchChart = async (sym: string, r: ChartRange) => {
     setLoading(true);
     setError(null);
@@ -78,9 +102,62 @@ export function MarketChartTerminal({
     }
   };
 
+  const fetchOutlook = async (
+    sym: string,
+    forceRefresh = false,
+    signal?: AbortSignal
+  ) => {
+    const cacheKey = sym.toUpperCase();
+    if (!forceRefresh) {
+      const cached = outlookCacheRef.current.get(cacheKey);
+      if (cached) {
+        setOutlook(cached);
+        setOutlookError(null);
+        setOutlookLoading(false);
+        return;
+      }
+    }
+
+    const reqId = ++outlookRequestIdRef.current;
+    setOutlookLoading(true);
+    setOutlookError(null);
+    try {
+      const query = forceRefresh ? '?refresh=1' : '';
+      const res = await fetch(
+        `/api/market/ai-outlook/${encodeURIComponent(sym)}${query}`,
+        { signal }
+      );
+      if (!res.ok) {
+        const errPayload = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(errPayload.error || `Unable to generate AI Outlook for ${sym}`);
+      }
+      const data = (await res.json()) as SymbolAiOutlook;
+      if (reqId !== outlookRequestIdRef.current) return;
+      outlookCacheRef.current.set(cacheKey, data);
+      setOutlook(data);
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+        return;
+      }
+      if (reqId !== outlookRequestIdRef.current) return;
+      setOutlookError(err instanceof Error ? err.message : 'Failed to load AI Outlook.');
+    } finally {
+      if (reqId === outlookRequestIdRef.current && !signal?.aborted) {
+        setOutlookLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     void fetchChart(symbol, range);
   }, [symbol, range]);
+
+  useEffect(() => {
+    setShowAiLevels(false);
+    const controller = new AbortController();
+    void fetchOutlook(symbol, false, controller.signal);
+    return () => controller.abort();
+  }, [symbol]);
 
   useEffect(() => {
     if (!searchOpen) return;
@@ -103,10 +180,16 @@ export function MarketChartTerminal({
   const isPositive = (quote?.change ?? 0) >= 0;
   const strokeColor = isPositive ? '#16A34A' : '#DC2626';
 
+  const effectiveTargetPrice =
+    overlayLevels?.targetPrice ?? (showAiLevels ? outlook?.suggestedTarget : undefined);
+  const effectiveStopLoss =
+    overlayLevels?.stopLoss ?? (showAiLevels ? outlook?.suggestedStopLoss : undefined);
+  const effectiveAvgBuy = overlayLevels?.avgBuyPrice;
+
   const priceValues = candles.map((c) => c.close);
-  if (overlayLevels?.targetPrice) priceValues.push(overlayLevels.targetPrice);
-  if (overlayLevels?.stopLoss) priceValues.push(overlayLevels.stopLoss);
-  if (overlayLevels?.avgBuyPrice) priceValues.push(overlayLevels.avgBuyPrice);
+  if (effectiveTargetPrice) priceValues.push(effectiveTargetPrice);
+  if (effectiveStopLoss) priceValues.push(effectiveStopLoss);
+  if (effectiveAvgBuy) priceValues.push(effectiveAvgBuy);
 
   const minPrice = priceValues.length > 0 ? Math.min(...priceValues) * 0.985 : 0;
   const maxPrice = priceValues.length > 0 ? Math.max(...priceValues) * 1.015 : 100;
@@ -341,11 +424,14 @@ export function MarketChartTerminal({
                   />
                   <span>SMA 50</span>
                 </label>
-                {overlayLevels && (overlayLevels.targetPrice || overlayLevels.avgBuyPrice) && (
+                {(effectiveTargetPrice || effectiveAvgBuy || effectiveStopLoss) && (
                   <button
                     type="button"
-                    onClick={onClearOverlay}
-                    className="text-blue-700 hover:underline font-medium"
+                    onClick={() => {
+                      setShowAiLevels(false);
+                      onClearOverlay?.();
+                    }}
+                    className="text-blue-700 hover:underline font-medium whitespace-nowrap shrink-0"
                   >
                     Clear Price Levels
                   </button>
@@ -438,39 +524,39 @@ export function MarketChartTerminal({
                         isAnimationActive={false}
                       />
                     )}
-                    {overlayLevels?.targetPrice && (
+                    {effectiveTargetPrice && (
                       <ReferenceLine
-                        y={overlayLevels.targetPrice}
+                        y={effectiveTargetPrice}
                         stroke="#16A34A"
                         strokeDasharray="4 4"
                         label={{
-                          value: `Target ${formatINR(overlayLevels.targetPrice)}`,
+                          value: `Target ${formatINR(effectiveTargetPrice)}`,
                           fill: '#15803D',
                           fontSize: 11,
                           position: 'insideTopLeft',
                         }}
                       />
                     )}
-                    {overlayLevels?.avgBuyPrice && (
+                    {effectiveAvgBuy && (
                       <ReferenceLine
-                        y={overlayLevels.avgBuyPrice}
+                        y={effectiveAvgBuy}
                         stroke="#1D4ED8"
                         strokeDasharray="3 3"
                         label={{
-                          value: `Avg Cost ${formatINR(overlayLevels.avgBuyPrice)}`,
+                          value: `Avg Cost ${formatINR(effectiveAvgBuy)}`,
                           fill: '#1D4ED8',
                           fontSize: 11,
                           position: 'insideBottomLeft',
                         }}
                       />
                     )}
-                    {overlayLevels?.stopLoss && (
+                    {effectiveStopLoss && (
                       <ReferenceLine
-                        y={overlayLevels.stopLoss}
+                        y={effectiveStopLoss}
                         stroke="#DC2626"
                         strokeDasharray="4 4"
                         label={{
-                          value: `Stop-Loss ${formatINR(overlayLevels.stopLoss)}`,
+                          value: `Stop-Loss ${formatINR(effectiveStopLoss)}`,
                           fill: '#B91C1C',
                           fontSize: 11,
                           position: 'insideBottomLeft',
@@ -584,6 +670,245 @@ export function MarketChartTerminal({
               </div>
             )}
           </>
+        )}
+      </div>
+
+      {/* AI Outlook Panel */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-blue-700 shrink-0" />
+              <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                AI Outlook — {outlook?.companyName ?? quote?.shortName ?? symbol}
+              </h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              6-month, 1-year, 5-year, and 10-year stock price forecast calibrated against live telemetry &amp; Nifty 50 strength
+              {outlook?.analysisSource === 'fallback_engine' ? ' · Quantitative Engine' : ''}
+              {outlook?.analyzedAt && (
+                <>
+                  {' · '}
+                  <span className="font-mono-tabular">
+                    Updated{' '}
+                    {new Date(outlook.analyzedAt).toLocaleTimeString('en-IN', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: false,
+                    })}
+                  </span>
+                </>
+              )}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {outlook && !overlayLevels?.targetPrice && (
+              <button
+                type="button"
+                onClick={() => setShowAiLevels((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  showAiLevels
+                    ? 'bg-blue-50 text-blue-800 border-blue-300'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <LineChartIcon className="w-3.5 h-3.5" />
+                {showAiLevels ? 'Hide Target / SL' : 'Plot Target / SL'}
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={outlookLoading}
+              onClick={() => void fetchOutlook(symbol, true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${outlookLoading ? 'animate-spin' : ''}`} />
+              {outlookLoading ? 'Forecasting...' : 'Refresh Outlook'}
+            </button>
+          </div>
+        </div>
+
+        {outlookError && !outlookLoading && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-center justify-between gap-3 text-xs text-red-800">
+            <span className="font-medium">{outlookError}</span>
+            <button
+              type="button"
+              onClick={() => void fetchOutlook(symbol, true)}
+              className="px-3 py-1.5 bg-red-700 text-white font-medium rounded-md hover:bg-red-800 whitespace-nowrap shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {outlookLoading && !outlook && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2 h-28 bg-slate-50 border border-slate-100 rounded-lg animate-pulse" />
+              <div className="h-28 bg-slate-50 border border-slate-100 rounded-lg animate-pulse" />
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-24 bg-slate-50 border border-slate-100 rounded-lg animate-pulse"
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {outlook && (
+          <div className={`space-y-5 ${outlookLoading ? 'opacity-60 transition-opacity' : ''}`}>
+            {outlook.quotaNotice && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-start gap-2.5 text-xs text-amber-900">
+                <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold">Quantitative Fallback Engine Active: </span>
+                  {outlook.quotaNotice}
+                </div>
+              </div>
+            )}
+
+            {/* Thesis + Target & Stop-Loss Summary */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <span
+                      className={`px-2.5 py-1 text-xs font-bold border rounded-md ${
+                        outlook.rating === 'BUY'
+                          ? 'bg-green-50 text-green-800 border-green-200'
+                          : outlook.rating === 'EXIT'
+                          ? 'bg-red-50 text-red-800 border-red-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}
+                    >
+                      {outlook.rating}
+                    </span>
+                    <span className="text-xs font-medium text-slate-600">
+                      {outlook.conviction} Conviction
+                    </span>
+                  </div>
+                  <div className="text-[11px] font-mono-tabular text-slate-500">
+                    {outlook.symbol.replace(/\.(NS|BO)$/, '')} · Live {formatINR(outlook.livePrice)}
+                    {outlook.benchmarkNifty6M !== null && (
+                      <> · Nifty 6M {formatPercent(outlook.benchmarkNifty6M)}</>
+                    )}
+                  </div>
+                </div>
+
+                <div className="text-sm font-semibold text-slate-900">{outlook.headline}</div>
+                <p className="text-xs text-slate-600 leading-relaxed">{outlook.rationale}</p>
+                <div className="text-xs text-slate-500 pt-0.5">
+                  <span className="font-semibold text-slate-700">Key Risk: </span>
+                  {outlook.keyRisk}
+                </div>
+              </div>
+
+              <div className="p-4 bg-white border border-slate-200 rounded-lg flex flex-col justify-between gap-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="text-[11px] text-slate-500">1Y AI Target</div>
+                    <div className="text-base font-bold font-mono-tabular text-green-700 mt-0.5">
+                      {formatINR(outlook.suggestedTarget)}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-green-700">
+                      {formatPercent(
+                        ((outlook.suggestedTarget - outlook.livePrice) /
+                          Math.max(0.01, outlook.livePrice)) *
+                          100
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Stop-Loss Support</div>
+                    <div className="text-base font-bold font-mono-tabular text-red-700 mt-0.5">
+                      {formatINR(outlook.suggestedStopLoss)}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-red-700">
+                      {formatPercent(
+                        ((outlook.suggestedStopLoss - outlook.livePrice) /
+                          Math.max(0.01, outlook.livePrice)) *
+                          100
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2.5 border-t border-slate-100 flex items-start gap-2 text-[11px] text-slate-600">
+                  {outlook.guardrailStatus === 'FLAGGED' ? (
+                    <ShieldAlert className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-700 shrink-0 mt-0.5" />
+                  )}
+                  <span>{outlook.guardrailNote}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Multi-Horizon Price Prediction Grid */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-bold text-slate-900">
+                  Projected Stock Price &amp; Return Trajectory (6M · 1Y · 5Y · 10Y)
+                </div>
+                <div className="text-[11px] text-slate-500">
+                  {outlook.projection.basisNote ||
+                    'Telemetry-calibrated forecast (illustrative, not guaranteed returns)'}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(
+                  [
+                    {
+                      label: '6-Month Price',
+                      val: outlook.projection.value6M,
+                      pct: outlook.projection.return6MPercent,
+                      suffix: 'est. return',
+                    },
+                    {
+                      label: '1-Year Price',
+                      val: outlook.projection.value1Y,
+                      pct: outlook.projection.return1YPercent,
+                      suffix: 'est. return',
+                    },
+                    {
+                      label: '5-Year Price',
+                      val: outlook.projection.value5Y,
+                      pct: outlook.projection.cagr5YPercent,
+                      suffix: 'CAGR',
+                    },
+                    {
+                      label: '10-Year Price',
+                      val: outlook.projection.value10Y,
+                      pct: outlook.projection.cagr10YPercent,
+                      suffix: 'CAGR',
+                    },
+                  ] as const
+                ).map((horizon) => (
+                  <div
+                    key={horizon.label}
+                    className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg"
+                  >
+                    <div className="text-[11px] font-medium text-slate-500">{horizon.label}</div>
+                    <div className="text-base font-bold font-mono-tabular text-slate-900 mt-1">
+                      {formatINR(horizon.val)}
+                    </div>
+                    <div
+                      className={`text-xs font-mono-tabular font-semibold mt-0.5 ${
+                        horizon.pct >= 0 ? 'text-green-700' : 'text-red-700'
+                      }`}
+                    >
+                      {formatPercent(horizon.pct)} {horizon.suffix}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

@@ -211,6 +211,28 @@ export interface PortfolioAnalysisResponse {
   analyzedAt: string;
 }
 
+export interface SymbolAiOutlook {
+  symbol: string;
+  companyName: string;
+  exchange: string;
+  sector: string;
+  livePrice: number;
+  rating: AiRatingVerdict;
+  conviction: 'High' | 'Medium' | 'Low';
+  headline: string;
+  rationale: string;
+  keyRisk: string;
+  suggestedTarget: number;
+  suggestedStopLoss: number;
+  projection: HorizonProjection;
+  guardrailStatus: 'PASSED' | 'ADJUSTED' | 'FLAGGED';
+  guardrailNote: string;
+  benchmarkNifty6M: number | null;
+  analysisSource: 'gemini' | 'fallback_engine';
+  quotaNotice?: string;
+  analyzedAt: string;
+}
+
 export type MfPlanType = 'Direct' | 'Regular';
 export type MfOptionType = 'Growth' | 'IDCW';
 export type MfHoldingSource = 'manual' | 'screenshot' | 'cas_pdf';

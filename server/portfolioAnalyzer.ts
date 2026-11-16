@@ -4,6 +4,7 @@ import type {
   HoldingAiRating,
   HorizonProjection,
   PortfolioAnalysisResponse,
+  SymbolAiOutlook,
 } from '../src/types/market.ts';
 
 export interface HoldingAnalysisInput {
@@ -221,7 +222,9 @@ function evaluateBatchQuantFallback(params: {
     }
 
     const techParts: string[] = [
-      `LTP ₹${live.toFixed(2)} (${t.unrealizedPnlPercent >= 0 ? '+' : ''}${t.unrealizedPnlPercent.toFixed(1)}% P&L)`,
+      t.portfolioWeightPercent > 0
+        ? `LTP ₹${live.toFixed(2)} (${t.unrealizedPnlPercent >= 0 ? '+' : ''}${t.unrealizedPnlPercent.toFixed(1)}% P&L)`
+        : `LTP ₹${live.toFixed(2)}`,
     ];
     if (t.sma50) techParts.push(`50-DMA ₹${t.sma50.toFixed(0)} (${above50 ? 'above' : 'below'})`);
     if (t.sma200) techParts.push(`200-DMA ₹${t.sma200.toFixed(0)} (${above200 ? 'above' : 'below'})`);
@@ -231,7 +234,10 @@ function evaluateBatchQuantFallback(params: {
     }
     if (t.roce !== null) techParts.push(`ROCE ${t.roce.toFixed(1)}%`);
 
-    const rationale = `${techParts.join(' · ')}. Position represents ${t.portfolioWeightPercent.toFixed(1)}% of portfolio value.`;
+    const rationale =
+      t.portfolioWeightPercent > 0
+        ? `${techParts.join(' · ')}. Position represents ${t.portfolioWeightPercent.toFixed(1)}% of portfolio value.`
+        : `${techParts.join(' · ')}. Grounded in Nifty 50 relative momentum and volatility telemetry.`;
 
     const keyRisk =
       verdict === 'EXIT'
@@ -737,4 +743,225 @@ export async function analyzePortfolioHoldings(
     quotaNotice: usedFallback ? QUOTA_EXHAUSTED_NOTICE : undefined,
     analyzedAt: new Date().toISOString(),
   };
+}
+
+const SYMBOL_OUTLOOK_TTL_MS = 10 * 60 * 1000;
+const symbolOutlookCache = new Map<string, { data: SymbolAiOutlook; expiresAt: number }>();
+
+export async function analyzeSingleSymbolOutlook(
+  symbolInput: string,
+  options?: { forceRefresh?: boolean }
+): Promise<SymbolAiOutlook> {
+  const symbol = symbolInput.trim().toUpperCase();
+  if (!symbol) {
+    throw new Error('A valid stock or index symbol is required.');
+  }
+
+  if (!options?.forceRefresh) {
+    const cached = symbolOutlookCache.get(symbol);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.data;
+    }
+  }
+
+  const fetchList = Array.from(new Set(['^NSEI', symbol]));
+  const quotes = await getQuotes(fetchList);
+  const quote = quotes[symbol];
+  const nifty = quotes['^NSEI'] ?? null;
+
+  if (!quote || quote.price <= 0) {
+    throw new Error(`No live market quote available for ${symbol}.`);
+  }
+
+  const telemetryItem: EnrichedTelemetryItem = {
+    symbol,
+    companyName: quote.shortName || symbol,
+    sector: quote.sector || 'Equities',
+    capCategory: quote.capCategory || 'Large Cap',
+    quantity: 1,
+    avgBuyPrice: quote.price,
+    buyDate: new Date().toISOString().slice(0, 10),
+    livePrice: quote.price,
+    currentValue: quote.price,
+    unrealizedPnlPercent: 0,
+    dayChangePercent: quote.changePercent ?? 0,
+    rsi14: quote.rsi14 ?? null,
+    sma50: quote.sma50 ?? null,
+    sma200: quote.sma200 ?? null,
+    return1M: quote.return1M ?? null,
+    return6M: quote.return6M ?? null,
+    return1Y: quote.return1Y ?? null,
+    peRatio: quote.peRatio ?? null,
+    roce: quote.roce ?? null,
+    debtToEquity: quote.debtToEquity ?? null,
+    beta: quote.beta ?? 1.0,
+    volumeRatio: quote.volumeRatio ?? 1.0,
+    portfolioWeightPercent: 0,
+  };
+
+  let rawRatings: RawGeminiRating[] = [];
+  let usedFallback = false;
+
+  if (!process.env.GEMINI_API_KEY) {
+    const fallback = evaluateBatchQuantFallback({
+      batch: [telemetryItem],
+      nifty,
+      sectorBreakdownText: quote.sector || 'Equities',
+      includeExecutiveSummary: false,
+    });
+    rawRatings = fallback.ratings;
+    usedFallback = true;
+  } else {
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const compactPayload = {
+      symbol: telemetryItem.symbol,
+      name: telemetryItem.companyName,
+      exchange: quote.exchange,
+      sector: telemetryItem.sector,
+      cap: telemetryItem.capCategory,
+      ltp: telemetryItem.livePrice,
+      dayChgPct: telemetryItem.dayChangePercent,
+      rsi14: telemetryItem.rsi14,
+      sma50: telemetryItem.sma50,
+      sma200: telemetryItem.sma200,
+      r1m: telemetryItem.return1M,
+      r6m: telemetryItem.return6M,
+      r1y: telemetryItem.return1Y,
+      roce: telemetryItem.roce,
+      pe: telemetryItem.peRatio,
+      beta: telemetryItem.beta,
+      volRatio: telemetryItem.volumeRatio,
+    };
+
+    const prompt = `Evaluate this single Indian NSE/BSE stock or index (${telemetryItem.symbol}) and provide a forward outlook with 6-month (p6m), 1-year (p1y), 5-year annual CAGR (cagr5y), and 10-year annual CAGR (cagr10y) return estimates.
+Nifty50 benchmark: level=${nifty ? nifty.price : 'N/A'}, 1D=${nifty ? `${nifty.changePercent}%` : 'N/A'}, 6M=${nifty?.return6M ?? 'N/A'}%.
+Give:
+- rating: BUY, HOLD, or EXIT
+- conviction: High, Medium, or Low
+- headline: crisp 1-sentence technical + fundamental thesis
+- rationale: 1-2 concise sentences citing live price, 50/200-DMA alignment, RSI-14, ROCE/valuation, or Nifty relative strength
+- keyRisk: 1 concise sentence on primary downside risk
+- suggestedTarget & suggestedStopLoss: realistic INR levels relative to LTP
+- p6m & p1y: expected cumulative percentage price return over next 6 months and 1 year
+- cagr5y & cagr10y: expected annualized CAGR percentage over 5-year and 10-year compounding horizons
+Data: ${JSON.stringify(compactPayload)}`;
+
+    const singleSchema = {
+      type: Type.OBJECT,
+      properties: {
+        rating: { type: Type.STRING, enum: ['BUY', 'HOLD', 'EXIT'] },
+        conviction: { type: Type.STRING, enum: ['High', 'Medium', 'Low'] },
+        headline: { type: Type.STRING },
+        rationale: { type: Type.STRING },
+        keyRisk: { type: Type.STRING },
+        suggestedTarget: { type: Type.NUMBER },
+        suggestedStopLoss: { type: Type.NUMBER },
+        p6m: { type: Type.NUMBER },
+        p1y: { type: Type.NUMBER },
+        cagr5y: { type: Type.NUMBER },
+        cagr10y: { type: Type.NUMBER },
+      },
+      required: [
+        'rating',
+        'conviction',
+        'headline',
+        'rationale',
+        'keyRisk',
+        'suggestedTarget',
+        'suggestedStopLoss',
+        'p6m',
+        'p1y',
+        'cagr5y',
+        'cagr10y',
+      ],
+    };
+
+    const modelCandidates: Array<{ model: string; thinkingLevel: ThinkingLevel }> = [
+      { model: 'gemini-4-hydrogen', thinkingLevel: ThinkingLevel.LOW },
+      { model: 'gemini-3.1-flash-lite', thinkingLevel: ThinkingLevel.MINIMAL },
+    ];
+
+    let lastError: unknown;
+    for (const candidate of modelCandidates) {
+      try {
+        const response = await ai.models.generateContent({
+          model: candidate.model,
+          contents: prompt,
+          config: {
+            thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
+            systemInstruction:
+              'You are a quantitative Indian equity analyst for Stoxify. Produce crisp, objective JSON outlooks strictly grounded in the live market telemetry.',
+            responseMimeType: 'application/json',
+            responseSchema: singleSchema,
+          },
+        });
+
+        const parsed = JSON.parse((response.text ?? '{}').trim()) as Omit<RawGeminiRating, 'symbol'>;
+        if (parsed?.rating) {
+          rawRatings = [{ ...parsed, symbol }];
+          break;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (rawRatings.length === 0) {
+      const fallback = evaluateBatchQuantFallback({
+        batch: [telemetryItem],
+        nifty,
+        sectorBreakdownText: quote.sector || 'Equities',
+        includeExecutiveSummary: false,
+      });
+      rawRatings = fallback.ratings;
+      usedFallback = true;
+    }
+
+    if (usedFallback && lastError && !isQuotaOrRateLimitError(lastError)) {
+      console.warn(`AI outlook fell back to quantitative engine for ${symbol}:`, lastError);
+    }
+  }
+
+  const telemetryMap = new Map([[symbol, telemetryItem]]);
+  const [guarded] = applyGuardrails(rawRatings, telemetryMap);
+  const projection =
+    guarded.projection ??
+    buildStockProjection(telemetryItem, guarded.rating, guarded.suggestedTarget);
+
+  const result: SymbolAiOutlook = {
+    symbol,
+    companyName: quote.shortName || symbol,
+    exchange: quote.exchange || 'NSE',
+    sector: quote.sector || 'Equities',
+    livePrice: Number(quote.price.toFixed(2)),
+    rating: guarded.rating,
+    conviction: guarded.conviction,
+    headline: guarded.headline,
+    rationale: guarded.rationale,
+    keyRisk: guarded.keyRisk,
+    suggestedTarget: guarded.suggestedTarget,
+    suggestedStopLoss: guarded.suggestedStopLoss,
+    projection,
+    guardrailStatus: guarded.guardrailStatus ?? 'PASSED',
+    guardrailNote: guarded.guardrailNote ?? 'Verified against live quote telemetry.',
+    benchmarkNifty6M: nifty?.return6M ?? null,
+    analysisSource: usedFallback ? 'fallback_engine' : 'gemini',
+    quotaNotice: usedFallback ? QUOTA_EXHAUSTED_NOTICE : undefined,
+    analyzedAt: new Date().toISOString(),
+  };
+
+  symbolOutlookCache.set(symbol, {
+    data: result,
+    expiresAt: Date.now() + SYMBOL_OUTLOOK_TTL_MS,
+  });
+
+  return result;
 }
