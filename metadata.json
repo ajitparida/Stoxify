@@ -1,0 +1,6 @@
+{
+  "name": "Stoxify",
+  "description": "Indian NSE/BSE equity portfolio tracker, live market charts, health diagnostics, stock screener, and research signal terminal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

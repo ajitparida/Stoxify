@@ -1,0 +1,212 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net — default deny everything
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedEmail() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprint: Holding
+    function isValidHolding(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'symbol', 'companyName', 'exchange',
+          'sector', 'quantity', 'avgBuyPrice', 'buyDate', 'source',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'symbol', 'companyName', 'exchange',
+          'sector', 'quantity', 'avgBuyPrice', 'buyDate', 'notes',
+          'source', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_\\-\\.]+$')
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 120
+        && data.exchange in ['NSE', 'BSE']
+        && data.sector is string && data.sector.size() >= 1 && data.sector.size() <= 64
+        && data.quantity is number && data.quantity > 0 && data.quantity <= 10000000
+        && data.avgBuyPrice is number && data.avgBuyPrice > 0 && data.avgBuyPrice <= 10000000
+        && data.buyDate is string && data.buyDate.size() >= 10 && data.buyDate.size() <= 20 && data.buyDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 300))
+        && data.source in ['manual', 'screenshot', 'signal']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: WatchlistItem
+    function isValidWatchlistItem(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'symbol', 'companyName', 'exchange',
+          'sector', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'symbol', 'companyName', 'exchange',
+          'sector', 'targetAlertPrice', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_\\-\\.]+$')
+        && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 120
+        && data.exchange in ['NSE', 'BSE']
+        && data.sector is string && data.sector.size() >= 1 && data.sector.size() <= 64
+        && (!('targetAlertPrice' in data) || (data.targetAlertPrice is number && data.targetAlertPrice >= 0 && data.targetAlertPrice <= 10000000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: MutualFundHolding
+    function isValidMutualFundHolding(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'schemeCode', 'schemeName', 'fundHouse',
+          'category', 'planType', 'optionType', 'units', 'avgNav',
+          'purchaseDate', 'isSip', 'source', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'schemeCode', 'schemeName', 'fundHouse',
+          'category', 'planType', 'optionType', 'units', 'avgNav',
+          'purchaseDate', 'isSip', 'monthlySipAmount', 'folioNumber',
+          'source', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.schemeCode is string && data.schemeCode.size() >= 1 && data.schemeCode.size() <= 16 && data.schemeCode.matches('^[0-9]+$')
+        && data.schemeName is string && data.schemeName.size() >= 1 && data.schemeName.size() <= 180
+        && data.fundHouse is string && data.fundHouse.size() >= 1 && data.fundHouse.size() <= 100
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.planType in ['Direct', 'Regular']
+        && data.optionType in ['Growth', 'IDCW']
+        && data.units is number && data.units > 0 && data.units <= 10000000
+        && data.avgNav is number && data.avgNav > 0 && data.avgNav <= 1000000
+        && data.purchaseDate is string && data.purchaseDate.size() >= 10 && data.purchaseDate.size() <= 20 && data.purchaseDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.isSip is bool
+        && (!('monthlySipAmount' in data) || (data.monthlySipAmount is number && data.monthlySipAmount >= 0 && data.monthlySipAmount <= 10000000))
+        && (!('folioNumber' in data) || (data.folioNumber is string && data.folioNumber.size() <= 40))
+        && data.source in ['manual', 'screenshot', 'cas_pdf']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // User Holdings Collection
+    match /users/{userId}/holdings/{holdingId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(holdingId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(holdingId)
+        && isValidHolding(incoming())
+        && incoming().id == holdingId
+        && incoming().userId == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(holdingId)
+        && isValidHolding(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['quantity', 'avgBuyPrice', 'buyDate', 'notes', 'sector', 'updatedAt'])
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().symbol == existing().symbol
+        && incoming().exchange == existing().exchange
+        && incoming().source == existing().source
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(holdingId) && existing().userId == request.auth.uid;
+    }
+
+    // User Watchlist Collection
+    match /users/{userId}/watchlist/{itemId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(itemId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(itemId)
+        && isValidWatchlistItem(incoming())
+        && incoming().id == itemId
+        && incoming().userId == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(itemId)
+        && isValidWatchlistItem(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['targetAlertPrice', 'sector', 'updatedAt'])
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().symbol == existing().symbol
+        && incoming().exchange == existing().exchange
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(itemId) && existing().userId == request.auth.uid;
+    }
+
+    // User Mutual Funds Collection
+    match /users/{userId}/mutualFunds/{fundHoldingId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(fundHoldingId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(fundHoldingId)
+        && isValidMutualFundHolding(incoming())
+        && incoming().id == fundHoldingId
+        && incoming().userId == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(fundHoldingId)
+        && isValidMutualFundHolding(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['units', 'avgNav', 'purchaseDate', 'isSip', 'monthlySipAmount', 'folioNumber', 'updatedAt'])
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().schemeCode == existing().schemeCode
+        && incoming().schemeName == existing().schemeName
+        && incoming().fundHouse == existing().fundHouse
+        && incoming().category == existing().category
+        && incoming().planType == existing().planType
+        && incoming().optionType == existing().optionType
+        && incoming().source == existing().source
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(fundHoldingId) && existing().userId == request.auth.uid;
+    }
+  }
+}

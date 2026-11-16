@@ -1,0 +1,240 @@
+{
+  "entities": {
+    "Holding": {
+      "title": "Holding",
+      "description": "An equity holding in a user's NSE/BSE portfolio",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "symbol": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Z0-9_\\-\\.]+$"
+        },
+        "companyName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "exchange": {
+          "type": "string",
+          "enum": ["NSE", "BSE"]
+        },
+        "sector": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "avgBuyPrice": {
+          "type": "number"
+        },
+        "buyDate": {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "source": {
+          "type": "string",
+          "enum": ["manual", "screenshot", "signal"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "symbol",
+        "companyName",
+        "exchange",
+        "sector",
+        "quantity",
+        "avgBuyPrice",
+        "buyDate",
+        "source",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "A tracked NSE/BSE stock in a user's watchlist with optional price alert",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "symbol": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Z0-9_\\-\\.]+$"
+        },
+        "companyName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "exchange": {
+          "type": "string",
+          "enum": ["NSE", "BSE"]
+        },
+        "sector": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "targetAlertPrice": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "symbol",
+        "companyName",
+        "exchange",
+        "sector",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "MutualFundHolding": {
+      "title": "MutualFundHolding",
+      "description": "An Indian mutual fund holding in a user's portfolio synced via AMFI scheme code",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "schemeCode": {
+          "type": "string",
+          "maxLength": 16,
+          "pattern": "^[0-9]+$"
+        },
+        "schemeName": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "fundHouse": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "planType": {
+          "type": "string",
+          "enum": ["Direct", "Regular"]
+        },
+        "optionType": {
+          "type": "string",
+          "enum": ["Growth", "IDCW"]
+        },
+        "units": {
+          "type": "number"
+        },
+        "avgNav": {
+          "type": "number"
+        },
+        "purchaseDate": {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "isSip": {
+          "type": "boolean"
+        },
+        "monthlySipAmount": {
+          "type": "number"
+        },
+        "folioNumber": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "source": {
+          "type": "string",
+          "enum": ["manual", "screenshot", "cas_pdf"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "schemeCode",
+        "schemeName",
+        "fundHouse",
+        "category",
+        "planType",
+        "optionType",
+        "units",
+        "avgNav",
+        "purchaseDate",
+        "isSip",
+        "source",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/holdings/{holdingId}": {
+      "schema": { "$ref": "#/entities/Holding" },
+      "description": "User-scoped NSE/BSE equity holdings"
+    },
+    "/users/{userId}/watchlist/{itemId}": {
+      "schema": { "$ref": "#/entities/WatchlistItem" },
+      "description": "User-scoped watchlist items and price alert thresholds"
+    },
+    "/users/{userId}/mutualFunds/{fundHoldingId}": {
+      "schema": { "$ref": "#/entities/MutualFundHolding" },
+      "description": "User-scoped Indian mutual fund holdings tracked by AMFI scheme code"
+    }
+  }
+}
