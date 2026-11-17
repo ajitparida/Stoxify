@@ -25,6 +25,9 @@ export interface AnalyzePortfolioOptions {
 const STOCK_AI_BATCH_SIZE = 40;
 const AI_BATCH_CONCURRENCY = 2;
 
+const RATING_CRITERIA =
+  'Criteria: BUY=constructive trend above 50/200-DMA (with wtPct<25 when portfolio weight is given) or quality oversold RSI<40 with healthy ROCE; HOLD=fair consolidation, stretched overbought RSI>=75, or oversized portfolio weight; EXIT=persistent 6M lag vs Nifty below 200-DMA or weak ROCE drag.';
+
 const QUOTA_EXHAUSTED_NOTICE =
   'Gemini API free-tier daily quota (20 req/day) was reached. Displaying quantitative ratings grounded in live NSE/BSE prices, 50/200-DMA, RSI-14, ROCE, and Nifty 50 relative strength. Select a billing-enabled key in Settings > Secrets for full LLM commentary.';
 
@@ -336,7 +339,7 @@ async function evaluateTelemetryBatch(params: {
 Nifty50: level=${nifty ? nifty.price : 'N/A'}, 1D=${nifty ? `${nifty.changePercent}%` : 'N/A'}, 6M=${nifty?.return6M ?? 'N/A'}%.
 ${summaryHint}
 Fields: s=symbol, ltp=livePrice, pnlPct=unrealizedPnl%, wtPct=portfolioWeight%, rsi=RSI14, sma50/sma200, r6m=6M return%, roce, pe, beta.
-Criteria: BUY=constructive trend above 50/200-DMA or quality oversold RSI<40 & wtPct<25; HOLD=fair consolidation/trail SL; EXIT=persistent 6M lag vs Nifty below 200-DMA or weak ROCE drag. Keep headline/rationale/keyRisk concise (1 sentence max each) and set realistic INR suggestedTarget and suggestedStopLoss relative to ltp plus p6m/p1y total % and cagr5y/cagr10y annual % CAGR.
+${RATING_CRITERIA} Keep headline/rationale/keyRisk concise (1 sentence max each) and set realistic INR suggestedTarget and suggestedStopLoss relative to ltp plus p6m/p1y total % and cagr5y/cagr10y annual % CAGR.
 Data:${JSON.stringify(compactTelemetry)}`;
 
   const schema = {
@@ -391,6 +394,7 @@ Data:${JSON.stringify(compactTelemetry)}`;
         model: candidate.model,
         contents: prompt,
         config: {
+          temperature: 0.1,
           thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
           systemInstruction:
             'You are a quantitative Indian equity portfolio analyst. Output concise, objective, data-grounded portfolio diagnostics in valid JSON. Rate every holding provided.',
@@ -843,8 +847,9 @@ export async function analyzeSingleSymbolOutlook(
 
     const prompt = `Evaluate this single Indian NSE/BSE stock or index (${telemetryItem.symbol}) and provide a forward outlook with 6-month (p6m), 1-year (p1y), 5-year annual CAGR (cagr5y), and 10-year annual CAGR (cagr10y) return estimates.
 Nifty50 benchmark: level=${nifty ? nifty.price : 'N/A'}, 1D=${nifty ? `${nifty.changePercent}%` : 'N/A'}, 6M=${nifty?.return6M ?? 'N/A'}%.
+${RATING_CRITERIA}
 Give:
-- rating: BUY, HOLD, or EXIT
+- rating: BUY, HOLD, or EXIT (strictly applying the criteria above)
 - conviction: High, Medium, or Low
 - headline: crisp 1-sentence technical + fundamental thesis
 - rationale: 1-2 concise sentences citing live price, 50/200-DMA alignment, RSI-14, ROCE/valuation, or Nifty relative strength
@@ -896,6 +901,7 @@ Data: ${JSON.stringify(compactPayload)}`;
           model: candidate.model,
           contents: prompt,
           config: {
+            temperature: 0.1,
             thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
             systemInstruction:
               'You are a quantitative Indian equity analyst for Stoxify. Produce crisp, objective JSON outlooks strictly grounded in the live market telemetry.',

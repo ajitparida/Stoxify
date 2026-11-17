@@ -419,4 +419,121 @@ export interface MfAiSwitchAdviceResponse {
   generatedAt: string;
 }
 
+export type RotationActionType = 'TRIM_PROFIT' | 'EXIT_LAGGARD';
 
+export interface RotationReplacementPick {
+  symbol: string;
+  ticker: string;
+  companyName: string;
+  exchange: Exchange;
+  sector: string;
+  capCategory: string;
+  livePrice: number;
+  roce: number | null;
+  peRatio: number | null;
+  debtToEquity: number | null;
+  rsi14: number | null;
+  return6M: number | null;
+  return1Y: number | null;
+  undervaluedScore: number;
+  sectorDiversificationBonus: boolean;
+  rotationThesis: string;
+  suggestedTarget: number;
+  suggestedStopLoss: number;
+}
+
+export interface CapitalRotationPair {
+  sourceSymbol: string;
+  sourceTicker: string;
+  sourceCompanyName: string;
+  sourceSector: string;
+  actionType: RotationActionType;
+  currentValue: number;
+  livePrice: number;
+  unrealizedPnlPercent: number;
+  portfolioWeightPercent: number;
+  suggestedTrimPercent: number;
+  estimatedFreedCapital: number;
+  triggerReason: string;
+  candidates: RotationReplacementPick[];
+}
+
+export interface CapitalRotationResponse {
+  totalEligibleFreedCapital: number;
+  trimCount: number;
+  exitCount: number;
+  avgSourceRoce: number | null;
+  avgReplacementRoce: number | null;
+  pairs: CapitalRotationPair[];
+  standaloneIdeas: RotationReplacementPick[];
+  benchmarkNifty6M: number | null;
+  analysisSource: 'gemini' | 'fallback_engine';
+  quotaNotice?: string;
+  generatedAt: string;
+}
+
+export type AiStrategyRisk = 'Low' | 'Moderate' | 'Aggressive';
+
+export interface StrategyConstituent {
+  symbol: string;
+  ticker: string;
+  name: string;
+  exchange: Exchange;
+  sector: string;
+  capCategory: string;
+  price: number;
+  changePercent: number;
+  peRatio: number | null;
+  roce: number | null;
+  debtToEquity: number | null;
+  rsi14: number | null;
+  return6M: number | null;
+  return1Y: number | null;
+  weightPercent: number;
+  factorScore: number;
+  selectionReason: string;
+}
+
+export interface StrategyRotationLogItem {
+  action: 'ROTATE_OUT' | 'ROTATE_IN';
+  symbol: string;
+  ticker: string;
+  companyName: string;
+  sector: string;
+  reason: string;
+  returnTag: string;
+}
+
+export interface StrategyChartPoint {
+  dateLabel: string;
+  strategyIndexed: number;
+  niftyIndexed: number;
+}
+
+export interface AiStrategyBasket {
+  id: string;
+  name: string;
+  tagline: string;
+  methodology: string;
+  riskProfile: AiStrategyRisk;
+  rebalanceCadence: string;
+  return1M: number | null;
+  return6M: number | null;
+  return1Y: number | null;
+  nifty1M: number | null;
+  nifty6M: number | null;
+  nifty1Y: number | null;
+  alpha6M: number | null;
+  alpha1Y: number | null;
+  avgRoce: number | null;
+  avgPe: number | null;
+  chartSeries: StrategyChartPoint[];
+  constituents: StrategyConstituent[];
+  recentRotations: StrategyRotationLogItem[];
+}
+
+export interface AiStrategiesResponse {
+  strategies: AiStrategyBasket[];
+  niftyBenchmark: MarketQuote | null;
+  fetchedAt: string;
+}

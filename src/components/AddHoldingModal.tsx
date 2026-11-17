@@ -12,6 +12,8 @@ interface AddHoldingModalProps {
     exchange?: Exchange;
     sector?: string;
     avgBuyPrice?: number;
+    quantity?: number;
+    notes?: string;
     source?: HoldingSource;
   } | null;
   onSave: (data: {
@@ -70,10 +72,10 @@ export function AddHoldingModal({
       setCompanyName(prefill.companyName || prefill.symbol.replace(/\.(NS|BO)$/, ''));
       setExchange(prefill.exchange || 'NSE');
       setSector(prefill.sector || 'Equities');
-      setQuantity('10');
+      setQuantity(prefill.quantity && prefill.quantity > 0 ? String(prefill.quantity) : '10');
       setAvgBuyPrice(prefill.avgBuyPrice ? String(prefill.avgBuyPrice) : '');
       setBuyDate(new Date().toISOString().slice(0, 10));
-      setNotes('');
+      setNotes(prefill.notes || '');
       setSource(prefill.source || 'manual');
       setQueryText('');
     } else {

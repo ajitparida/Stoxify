@@ -13,6 +13,7 @@ import {
   RefreshCw,
   ShieldAlert,
   Sparkles,
+  TrendingUp,
   Upload,
   X,
 } from 'lucide-react';
@@ -48,7 +49,9 @@ import { PortfolioView } from './components/PortfolioView';
 import { ProScreenerView } from './components/ProScreenerView';
 import { ResearchSignalsView } from './components/ResearchSignalsView';
 import { ScreenshotImportModal } from './components/ScreenshotImportModal';
+import { AiStrategiesView } from './components/AiStrategiesView';
 import type {
+  CapitalRotationResponse,
   Exchange,
   HoldingRecord,
   HoldingSource,
@@ -60,6 +63,7 @@ import type {
   MutualFundAnalysisResponse,
   MutualFundHoldingRecord,
   PortfolioAnalysisResponse,
+  RotationReplacementPick,
   WatchlistRecord,
 } from './types/market';
 import {
@@ -79,7 +83,8 @@ type WorkspaceTab =
   | 'diagnostics'
   | 'charts'
   | 'screener'
-  | 'signals';
+  | 'signals'
+  | 'strategies';
 
 const NAV_GROUPS: Array<{
   groupLabel: string | null;
@@ -103,6 +108,7 @@ const NAV_GROUPS: Array<{
       { key: 'charts', label: 'Live Market Charts', icon: CandlestickChart },
       { key: 'screener', label: 'Pro Stock Screener', icon: Filter },
       { key: 'signals', label: 'Research Signals', icon: Sparkles },
+      { key: 'strategies', label: 'AI Strategies', icon: TrendingUp },
     ],
   },
 ];
@@ -172,6 +178,8 @@ export default function App() {
     exchange?: Exchange;
     sector?: string;
     avgBuyPrice?: number;
+    quantity?: number;
+    notes?: string;
     source?: HoldingSource;
   } | null>(null);
   const [screenshotModalOpen, setScreenshotModalOpen] = useState(false);
@@ -187,6 +195,9 @@ export default function App() {
     totalCount: number;
   } | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [rotationData, setRotationData] = useState<CapitalRotationResponse | null>(null);
+  const [rotationLoading, setRotationLoading] = useState(false);
+  const [rotationError, setRotationError] = useState<string | null>(null);
   const [portfolioActionBusy, setPortfolioActionBusy] = useState(false);
   const [clearConfirmTarget, setClearConfirmTarget] = useState<'equities' | 'mutualFunds' | null>(
     null
@@ -533,12 +544,7 @@ export default function App() {
     setMobileMenuOpen(false);
   };
 
-  const handleRunAiAnalysis = async () => {
-    if (activeHoldings.length === 0) return;
-    setAiLoading(true);
-    setAiError(null);
-
-    // Consolidate by symbol first & prioritize largest positions so batch #1 covers key exposure first
+  const getConsolidatedHoldings = useCallback(() => {
     const valueBySymbol = new Map<string, number>();
     for (const eh of enrichedHoldings) {
       const sym = eh.symbol.toUpperCase();
@@ -583,9 +589,51 @@ export default function App() {
       }
     }
 
-    const uniqueSortedHoldings = Array.from(consolidatedMap.values()).sort(
-      (a, b) => (valueBySymbol.get(b.symbol) ?? 0) - (valueBySymbol.get(a.symbol) ?? 0)
-    );
+    return {
+      valueBySymbol,
+      uniqueSortedHoldings: Array.from(consolidatedMap.values()).sort(
+        (a, b) => (valueBySymbol.get(b.symbol) ?? 0) - (valueBySymbol.get(a.symbol) ?? 0)
+      ),
+    };
+  }, [activeHoldings, enrichedHoldings]);
+
+  const handleRunCapitalRotation = useCallback(async () => {
+    if (activeHoldings.length === 0) return;
+    setRotationLoading(true);
+    setRotationError(null);
+    const { uniqueSortedHoldings } = getConsolidatedHoldings();
+
+    try {
+      const res = await fetch('/api/portfolio/rotation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ holdings: uniqueSortedHoldings }),
+      });
+      if (!res.ok) {
+        const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(
+          formatApiError(errBody.error || '', 'Failed to compute Smart Capital Rotation.')
+        );
+      }
+      const json = (await res.json()) as CapitalRotationResponse;
+      setRotationData(json);
+    } catch (err) {
+      const rawMsg =
+        err instanceof Error ? err.message : 'Unable to scan Smart Capital Rotation setups.';
+      setRotationError(formatApiError(rawMsg, 'Unable to scan Smart Capital Rotation setups.'));
+    } finally {
+      setRotationLoading(false);
+    }
+  }, [activeHoldings.length, getConsolidatedHoldings]);
+
+  const handleRunAiAnalysis = async () => {
+    if (activeHoldings.length === 0) return;
+    setAiLoading(true);
+    setAiError(null);
+    void handleRunCapitalRotation();
+
+    // Consolidate by symbol first & prioritize largest positions so batch #1 covers key exposure first
+    const { valueBySymbol, uniqueSortedHoldings } = getConsolidatedHoldings();
 
     const CLIENT_AI_BATCH_SIZE = 40;
     const batches: Array<typeof uniqueSortedHoldings> = [];
@@ -995,6 +1043,8 @@ export default function App() {
           setGuestHoldings([]);
         }
         setAiAnalysis(null);
+        setRotationData(null);
+        setRotationError(null);
         showToast('All equity holdings cleared.');
       } else {
         if (user) {
@@ -1383,6 +1433,55 @@ export default function App() {
               onSelectSymbol={(sym) => setSelectedChartSymbol(sym)}
               overlayLevels={chartOverlays}
               onClearOverlay={() => setChartOverlays(null)}
+              portfolioRating={
+                aiAnalysis?.ratings.find(
+                  (r) => r.symbol.toUpperCase() === selectedChartSymbol.toUpperCase()
+                ) ?? null
+              }
+              portfolioAnalysisMeta={
+                aiAnalysis
+                  ? {
+                      analyzedAt: aiAnalysis.analyzedAt,
+                      analysisSource: aiAnalysis.analysisSource ?? 'gemini',
+                      quotaNotice: aiAnalysis.quotaNotice,
+                      benchmarkNifty6M: aiAnalysis.benchmarkNifty6M,
+                      livePrice: quotes[selectedChartSymbol]?.price,
+                      companyName: quotes[selectedChartSymbol]?.shortName,
+                      exchange: quotes[selectedChartSymbol]?.exchange,
+                      sector: quotes[selectedChartSymbol]?.sector,
+                    }
+                  : null
+              }
+              onOutlookUpdated={(updated) => {
+                setAiAnalysis((prev) => {
+                  if (!prev) return prev;
+                  const targetSym = updated.symbol.toUpperCase();
+                  if (!prev.ratings.some((r) => r.symbol.toUpperCase() === targetSym)) {
+                    return prev;
+                  }
+                  return {
+                    ...prev,
+                    ratings: prev.ratings.map((r) =>
+                      r.symbol.toUpperCase() === targetSym
+                        ? {
+                            ...r,
+                            rating: updated.rating,
+                            conviction: updated.conviction,
+                            headline: updated.headline,
+                            rationale: updated.rationale,
+                            keyRisk: updated.keyRisk,
+                            suggestedTarget: updated.suggestedTarget,
+                            suggestedStopLoss: updated.suggestedStopLoss,
+                            projection: updated.projection,
+                            guardrailStatus: updated.guardrailStatus,
+                            guardrailNote: updated.guardrailNote,
+                          }
+                        : r
+                    ),
+                    analyzedAt: updated.analyzedAt,
+                  };
+                });
+              }}
               onAddHoldingClick={(sym) => {
                 setEditingHolding(null);
                 setPrefillHolding(
@@ -1416,6 +1515,38 @@ export default function App() {
               aiProgress={aiBatchProgress}
               aiError={aiError}
               onRunAiAnalysis={() => void handleRunAiAnalysis()}
+              rotationData={rotationData}
+              rotationLoading={rotationLoading}
+              rotationError={rotationError}
+              onRunCapitalRotation={() => void handleRunCapitalRotation()}
+              onToggleWatchlist={(sym, name, exch, sec) =>
+                void handleToggleWatchlist(sym, name, exch, sec)
+              }
+              isInWatchlist={isInWatchlist}
+              onStageRotationBuy={(
+                pick: RotationReplacementPick,
+                freedCapitalInr?: number,
+                sourceTicker?: string
+              ) => {
+                const estQty =
+                  freedCapitalInr && pick.livePrice > 0
+                    ? Math.max(1, Math.floor(freedCapitalInr / pick.livePrice))
+                    : 10;
+                setEditingHolding(null);
+                setPrefillHolding({
+                  symbol: pick.symbol,
+                  companyName: pick.companyName,
+                  exchange: pick.exchange,
+                  sector: pick.sector,
+                  avgBuyPrice: pick.livePrice,
+                  quantity: estQty,
+                  notes: sourceTicker
+                    ? `Rotated from ${sourceTicker} (Target ${formatINR(pick.suggestedTarget)} / SL ${formatINR(pick.suggestedStopLoss)})`
+                    : `Rotation Setup (Score ${pick.undervaluedScore})`,
+                  source: 'signal',
+                });
+                setAddModalOpen(true);
+              }}
               onInspectChart={(sym, levels) => openChartForSymbol(sym, levels ?? null)}
             />
           )}
@@ -1436,6 +1567,32 @@ export default function App() {
               onLogSignalPosition={(prefill) => {
                 setEditingHolding(null);
                 setPrefillHolding(prefill);
+                setAddModalOpen(true);
+              }}
+            />
+          )}
+
+          {activeTab === 'strategies' && (
+            <AiStrategiesView
+              onInspectChart={(sym) => openChartForSymbol(sym)}
+              onToggleWatchlist={(sym, name, exch, sec) =>
+                void handleToggleWatchlist(sym, name, exch, sec)
+              }
+              isInWatchlist={isInWatchlist}
+              onStageBuy={(constituent, strategyName) => {
+                const defaultQty =
+                  constituent.price > 0 ? Math.max(1, Math.round(25000 / constituent.price)) : 10;
+                setEditingHolding(null);
+                setPrefillHolding({
+                  symbol: constituent.symbol,
+                  companyName: constituent.name,
+                  exchange: constituent.exchange,
+                  sector: constituent.sector,
+                  avgBuyPrice: constituent.price,
+                  quantity: defaultQty,
+                  notes: `${strategyName} constituent (${constituent.weightPercent}% basket weight)`,
+                  source: 'signal',
+                });
                 setAddModalOpen(true);
               }}
             />

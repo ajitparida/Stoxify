@@ -31,7 +31,7 @@ This document is the canonical engineering reference for AI coding agents and de
 ### Entry Point: `/server.ts`
 - Configures `express.json({ limit: '64mb' })` to accommodate multi-image base64 screenshots and CAS PDFs.
 - Exposes `formatRouteError(err, fallback)` which translates `429` / `RESOURCE_EXHAUSTED` quota errors into actionable user messages (pointing to zero-quota Zerodha Kite/Coin CSV uploads or billing-enabled Gemini keys).
-- All 15 `/api/*` endpoints delegate cleanly to dedicated service modules in `server/`.
+- All 17 `/api/*` endpoints delegate cleanly to dedicated service modules in `server/`.
 
 ### Service Modules (`server/`)
 
@@ -45,6 +45,7 @@ This document is the canonical engineering reference for AI coding agents and de
 | **`mutualFundService.ts`** | Live AMFI NAV history (`api.mfapi.in`), Yahoo benchmark series, XIRR Newton-Raphson solver, FIFO lot tax classification (STCG vs. LTCG ₹1.25L exemption), tiered exit loads, Direct vs. Regular fee bleed, and peer switch scoring. | `searchMutualFunds`, `analyzeMutualFundPortfolio`, `fetchMfSchemeSeries` | `schemeCache`, `searchCache`, `benchmarkCache`. |
 | **`schemeMetadataCatalog.ts`** | Mutual fund TER ratios (Direct vs. Regular) and tiered exit-load window evaluator. | `resolveSchemeCostProfile`, `evaluateTieredExitLoadPct` | Static rule catalog. |
 | **`mutualFundAiService.ts`** | Gemini Vision/PDF extraction for CAS PDFs/MF app screenshots + AI Switch Strategy generator with quantitative fallback and `6M / 1Y / 5Y / 10Y` wealth projections. | `parseMutualFundImport`, `generateMfSwitchAdvice`, `MfImportFileInput` | Falls back to quantitative advice cleanly on `429`/quota exhaustion. |
+| **`capitalRotationService.ts`** | Smart Capital Rotation engine (pairs `TRIM_PROFIT` / `EXIT_LAGGARD` equity holdings with undervalued high-ROCE NSE candidates) and 4 quantitative AI Strategy baskets benchmarked against Nifty 50. | `generateCapitalRotation`, `getAiStrategyBaskets` | `STRATEGY_TTL_MS = 5 min` (`strategyCache`); falls back cleanly on `429`/quota exhaustion. |
 
 ---
 
@@ -75,7 +76,7 @@ Every Gemini-powered service module MUST follow this resilient pattern:
 - **Navigation Groups (`NAV_GROUPS`)**:
   - Top: `overview` (**Overview**)
   - `Portfolios`: `portfolio` (**Equity Holdings**), `mutualFunds` (**Mutual Funds Pro**), `diagnostics` (**Health Diagnostics**)
-  - `Market Intelligence`: `charts` (**Live Market Charts**), `screener` (**Pro Stock Screener**), `signals` (**Research Signals**)
+  - `Market Intelligence`: `charts` (**Live Market Charts**), `screener` (**Pro Stock Screener**), `signals` (**Research Signals**), `strategies` (**AI Strategies**)
 - **Workspace Persistence State**:
   - Starts with empty arrays (`guestHoldings = []`, `guestMutualFunds = []`) until user adds positions, imports CSV/screenshots, or clicks **Pre-load Demo**.
   - On verified Google Sign-In (`onAuthStateChanged`), subscribes to `subscribeHoldings`, `subscribeWatchlist`, and `subscribeMutualFunds`.
@@ -88,12 +89,12 @@ Every Gemini-powered service module MUST follow this resilient pattern:
 - **`OverviewDashboardView.tsx`**: Combined Equity + MF net worth KPIs, allocation split, quick demo/import onboarding when empty, benchmark strip, and watchlist actions.
 - **`PortfolioView.tsx`**: Equity holdings table with search, multi-criteria filtering, column sorting (`SortableTh`), manual/CSV/screenshot import triggers, edit/delete, **Pre-load Demo**, and **Clear All** confirmation modal trigger.
 - **`MutualFundsView.tsx`**: AMFI-synced MF table with sorting/filtering, tax slab (`taxSlabPct`) & LTCG exemption inputs, FIFO & exit-load drilldown, AI Switch Strategy panel with 6M/1Y/5Y/10Y projections, **Pre-load Demo**, and **Clear All**.
-- **`HealthDiagnosticsView.tsx`**: Portfolio risk diagnostics + Batched AI Portfolio Audit UI displaying `HorizonProjection` (`6M · 1Y · 5Y · 10Y`), verdicts, targets, stops, and guardrail status.
+- **`HealthDiagnosticsView.tsx`**: Portfolio risk diagnostics + Batched AI Portfolio Audit UI displaying `HorizonProjection` (`6M · 1Y · 5Y · 10Y`), verdicts, targets, stops, guardrail status, and Smart Capital Rotation paired trim/exit -> undervalued replacement cards.
 - **`MarketChartTerminal.tsx`**:
   - Charts `1D / 1W / 1M / 6M / 1Y` OHLCV data + `EMA 20` / `SMA 50` + volume bar histogram.
   - Integrates the **AI Outlook** panel: auto-fetches `/api/market/ai-outlook/:symbol` ONLY on `symbol` changes (uses `AbortController` + `outlookRequestIdRef` guard + client `outlookCacheRef` Map so timeframe changes never trigger duplicate AI calls).
   - Supports plotting AI Target & Stop-Loss lines onto the `ComposedChart` (`Plot Target / SL` toggle merged cleanly with `overlayLevels` prop).
-- **`ProScreenerView.tsx` & `ResearchSignalsView.tsx`**: Preset filtering, multi-column sorting (`SortableTh`), signal cards, and one-click chart plotting / watchlist / add-holding hooks.
+- **`ProScreenerView.tsx`, `ResearchSignalsView.tsx` & `AiStrategiesView.tsx`**: Preset filtering, multi-column sorting (`SortableTh`), signal cards, 4 Nifty-benchmarked NSE factor baskets with 100-indexed Recharts curves & monthly rotation ledgers, and one-click chart plotting / watchlist / add-holding hooks.
 
 ---
 

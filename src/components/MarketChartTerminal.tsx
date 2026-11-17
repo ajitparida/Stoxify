@@ -27,6 +27,7 @@ import {
 import type {
   ChartRange,
   ChartResponse,
+  HoldingAiRating,
   SearchResultItem,
   SymbolAiOutlook,
 } from '../types/market';
@@ -40,6 +41,17 @@ export interface ChartOverlayLevels {
   avgBuyPrice?: number;
 }
 
+export interface PortfolioAnalysisMeta {
+  analyzedAt: string;
+  analysisSource: 'gemini' | 'fallback_engine';
+  quotaNotice?: string;
+  benchmarkNifty6M: number | null;
+  livePrice?: number;
+  companyName?: string;
+  exchange?: string;
+  sector?: string;
+}
+
 interface MarketChartTerminalProps {
   symbol: string;
   onSelectSymbol: (symbol: string) => void;
@@ -48,6 +60,9 @@ interface MarketChartTerminalProps {
   onAddHoldingClick: (prefillSymbol?: string) => void;
   onToggleWatchlist: (symbol: string, name: string, exchange: 'NSE' | 'BSE', sector: string) => void;
   isInWatchlist: (symbol: string) => boolean;
+  portfolioRating?: HoldingAiRating | null;
+  portfolioAnalysisMeta?: PortfolioAnalysisMeta | null;
+  onOutlookUpdated?: (outlook: SymbolAiOutlook) => void;
 }
 
 const RANGES: Array<{ key: ChartRange; label: string }> = [
@@ -66,6 +81,9 @@ export function MarketChartTerminal({
   onAddHoldingClick,
   onToggleWatchlist,
   isInWatchlist,
+  portfolioRating = null,
+  portfolioAnalysisMeta = null,
+  onOutlookUpdated,
 }: MarketChartTerminalProps) {
   const [range, setRange] = useState<ChartRange>('6mo');
   const [chartData, setChartData] = useState<ChartResponse | null>(null);
@@ -80,7 +98,10 @@ export function MarketChartTerminal({
 
   const outlookCacheRef = useRef<Map<string, SymbolAiOutlook>>(new Map());
   const outlookRequestIdRef = useRef(0);
-  const [outlook, setOutlook] = useState<SymbolAiOutlook | null>(null);
+  const onOutlookUpdatedRef = useRef(onOutlookUpdated);
+  onOutlookUpdatedRef.current = onOutlookUpdated;
+
+  const [fetchedOutlook, setFetchedOutlook] = useState<SymbolAiOutlook | null>(null);
   const [outlookLoading, setOutlookLoading] = useState(true);
   const [outlookError, setOutlookError] = useState<string | null>(null);
   const [showAiLevels, setShowAiLevels] = useState(false);
@@ -111,7 +132,7 @@ export function MarketChartTerminal({
     if (!forceRefresh) {
       const cached = outlookCacheRef.current.get(cacheKey);
       if (cached) {
-        setOutlook(cached);
+        setFetchedOutlook(cached);
         setOutlookError(null);
         setOutlookLoading(false);
         return;
@@ -134,7 +155,10 @@ export function MarketChartTerminal({
       const data = (await res.json()) as SymbolAiOutlook;
       if (reqId !== outlookRequestIdRef.current) return;
       outlookCacheRef.current.set(cacheKey, data);
-      setOutlook(data);
+      setFetchedOutlook(data);
+      if (forceRefresh) {
+        onOutlookUpdatedRef.current?.(data);
+      }
     } catch (err) {
       if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
         return;
@@ -152,12 +176,56 @@ export function MarketChartTerminal({
     void fetchChart(symbol, range);
   }, [symbol, range]);
 
+  const syncedPortfolioKey =
+    portfolioRating &&
+    portfolioRating.projection &&
+    portfolioRating.symbol.toUpperCase() === symbol.toUpperCase()
+      ? `${portfolioRating.symbol.toUpperCase()}_${portfolioAnalysisMeta?.analyzedAt ?? ''}`
+      : null;
+
   useEffect(() => {
     setShowAiLevels(false);
+    if (syncedPortfolioKey && portfolioRating?.projection) {
+      setOutlookLoading(false);
+      setOutlookError(null);
+      return;
+    }
     const controller = new AbortController();
     void fetchOutlook(symbol, false, controller.signal);
     return () => controller.abort();
-  }, [symbol]);
+  }, [symbol, syncedPortfolioKey]);
+
+  const outlook: SymbolAiOutlook | null =
+    syncedPortfolioKey && portfolioRating?.projection
+      ? {
+          symbol: portfolioRating.symbol,
+          companyName:
+            chartData?.quote?.shortName ?? portfolioAnalysisMeta?.companyName ?? symbol,
+          exchange:
+            chartData?.quote?.exchange ?? portfolioAnalysisMeta?.exchange ?? 'NSE',
+          sector:
+            chartData?.quote?.sector ?? portfolioAnalysisMeta?.sector ?? 'Equities',
+          livePrice:
+            chartData?.quote?.price ??
+            portfolioAnalysisMeta?.livePrice ??
+            portfolioRating.suggestedTarget,
+          rating: portfolioRating.rating,
+          conviction: portfolioRating.conviction,
+          headline: portfolioRating.headline,
+          rationale: portfolioRating.rationale,
+          keyRisk: portfolioRating.keyRisk,
+          suggestedTarget: portfolioRating.suggestedTarget,
+          suggestedStopLoss: portfolioRating.suggestedStopLoss,
+          projection: portfolioRating.projection,
+          guardrailStatus: portfolioRating.guardrailStatus ?? 'PASSED',
+          guardrailNote:
+            portfolioRating.guardrailNote ?? 'Verified against live quote telemetry.',
+          benchmarkNifty6M: portfolioAnalysisMeta?.benchmarkNifty6M ?? null,
+          analysisSource: portfolioAnalysisMeta?.analysisSource ?? 'gemini',
+          quotaNotice: portfolioAnalysisMeta?.quotaNotice,
+          analyzedAt: portfolioAnalysisMeta?.analyzedAt ?? new Date().toISOString(),
+        }
+      : fetchedOutlook;
 
   useEffect(() => {
     if (!searchOpen) return;
@@ -685,6 +753,7 @@ export function MarketChartTerminal({
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
               6-month, 1-year, 5-year, and 10-year stock price forecast calibrated against live telemetry &amp; Nifty 50 strength
+              {syncedPortfolioKey ? ' · Synced with Portfolio Audit' : ''}
               {outlook?.analysisSource === 'fallback_engine' ? ' · Quantitative Engine' : ''}
               {outlook?.analyzedAt && (
                 <>

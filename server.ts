@@ -24,6 +24,10 @@ import {
   type MfImportFileInput,
 } from './server/mutualFundAiService.ts';
 import { parseMutualFundCsv, parseStockPortfolioCsv } from './server/csvParser.ts';
+import {
+  generateCapitalRotation,
+  getAiStrategyBaskets,
+} from './server/capitalRotationService.ts';
 import type {
   AnalyzedMutualFund,
   ChartRange,
@@ -145,6 +149,18 @@ async function startServer() {
     }
   });
 
+  app.get('/api/strategies', async (_req, res) => {
+    try {
+      const data = await getAiStrategyBaskets();
+      res.json(data);
+    } catch (error) {
+      console.error('AI strategies endpoint error:', error);
+      res.status(500).json({
+        error: formatRouteError(error, 'Failed to load AI stock strategies.'),
+      });
+    }
+  });
+
   app.post('/api/portfolio/parse-screenshot', async (req, res) => {
     try {
       const body = req.body as { images?: ScreenshotInput[] };
@@ -214,6 +230,27 @@ async function startServer() {
       console.error('Portfolio AI analysis error:', error);
       res.status(500).json({
         error: formatRouteError(error, 'Failed to evaluate portfolio holdings.'),
+      });
+    }
+  });
+
+  app.post('/api/portfolio/rotation', async (req, res) => {
+    try {
+      const body = req.body as { holdings?: HoldingAnalysisInput[] };
+      const holdings = Array.isArray(body?.holdings) ? body.holdings.slice(0, 250) : [];
+      if (holdings.length === 0) {
+        res.status(400).json({
+          error: 'At least one equity holding is required to scan Smart Capital Rotation.',
+        });
+        return;
+      }
+
+      const rotation = await generateCapitalRotation(holdings);
+      res.json(rotation);
+    } catch (error) {
+      console.error('Capital rotation endpoint error:', error);
+      res.status(500).json({
+        error: formatRouteError(error, 'Failed to compute Smart Capital Rotation.'),
       });
     }
   });

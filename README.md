@@ -34,9 +34,11 @@
 - **Integrated `AI Outlook` Panel**: Automatically fetches single-symbol AI analysis for the active stock or index (`^NSEI`, `^BSESN`, `^NSEBANK`, `RELIANCE.NS`, `TCS.NS`, etc.) showing `BUY` / `HOLD` / `EXIT` rating, conviction, technical rationale, key risk, 1Y Target, Stop-Loss Support, guardrail verification, and **6M / 1Y / 5Y / 10Y** price forecasts.
 - **Chart Level Overlays**: One-click **Plot Target / SL** toggle draws predicted Target and Stop-Loss reference lines directly onto the chart (alongside Avg Buy Cost when inspecting from a portfolio holding).
 
-### 6. Pro Stock Screener & Research Signals (`ProScreenerView`, `ResearchSignalsView`)
+### 6. Pro Stock Screener, Research Signals & AI Stock Strategies (`ProScreenerView`, `ResearchSignalsView`, `AiStrategiesView`)
 - **Screener Presets**: `all`, `golden_crossover`, `volume_shockers`, `multibagger_value`, `oversold_rebound`, and `top_gainers` over the NSE/BSE universe with multi-criteria filtering and sorting.
 - **Research Signals**: Live short-term, positional, and swing trade ideas with entry ranges, target prices, stop-losses, and one-click chart plotting.
+- **AI Quantitative Stock Strategies**: 4 live NSE model baskets (*Bharat Momentum Leaders*, *Undervalued Compounders*, *Domestic Capex & Mid-Cap Alpha*, *Quality Value & Low-Beta Shield*) tracked with `6M / 1Y` normalized curves vs. Nifty 50 (`^NSEI`), monthly profit-lock rotation logs, and one-click buy staging.
+- **Smart Capital Rotation**: Inside `HealthDiagnosticsView`, flags triple-digit/extended winners (`TRIM_PROFIT`) and chronic 200-DMA laggards (`EXIT_LAGGARD`) and pairs each with high-ROCE, undervalued NSE replacement candidates.
 
 ---
 
@@ -65,6 +67,7 @@
 ├── server/
 │   ├── marketService.ts               # Live NSE/BSE quotes, OHLCV charts, SMA/EMA/RSI, search, screener & signals
 │   ├── portfolioAnalyzer.ts           # Single-symbol AI Outlook, batched portfolio AI audit, guardrails & 6M-10Y forecasts
+│   ├── capitalRotationService.ts      # Smart Capital Rotation pairings & 4 Nifty-benchmarked NSE quantitative strategy baskets
 │   ├── screenshotParser.ts            # Multi-image equity broker screenshot parser via Gemini Vision
 │   ├── csvParser.ts                   # Zero-AI Zerodha Kite (equity) & Zerodha Coin (MF) CSV parsers
 │   ├── mutualFundService.ts           # AMFI scheme search, NAV history, XIRR, FIFO tax, tiered exit load & TER bleed
@@ -84,6 +87,7 @@
         ├── MarketChartTerminal.tsx    # Interactive Recharts price/volume terminal & integrated AI Outlook panel
         ├── ProScreenerView.tsx        # Sortable/filterable NSE/BSE screener
         ├── ResearchSignalsView.tsx    # Trade signal cards with chart level plotting
+        ├── AiStrategiesView.tsx       # 4 benchmarked NSE quantitative strategy baskets & rotation ledger
         ├── AddHoldingModal.tsx        # Add/edit equity holding modal with ticker search
         ├── AddMutualFundModal.tsx     # Add/edit mutual fund holding modal with AMFI search
         ├── ScreenshotImportModal.tsx  # Equity CSV & screenshot multi-file upload/review modal
@@ -108,6 +112,7 @@ All API routes are served from `server.ts` on `/api/*`.
 | `GET` | `/api/market/screener` | Live telemetry snapshot across the Stoxify Indian equity screener universe. |
 | `GET` | `/api/market/signals` | Live research signal feed calibrated with current market prices. |
 | `GET` | `/api/market/ai-outlook/:symbol?refresh=1` | Single-symbol AI Outlook (`BUY`/`HOLD`/`EXIT`, thesis, key risk, Target, Stop-Loss, and `6M / 1Y / 5Y / 10Y` predictions). Server-cached for 10 minutes unless `refresh=1`. |
+| `GET` | `/api/strategies` | Returns 4 live NSE quantitative stock strategy baskets with `1M / 6M / 1Y` normalized performance curves vs. Nifty 50 (`^NSEI`), monthly rotation logs, and constituent metrics. |
 
 ### Equity Portfolio Endpoints
 | Method | Endpoint | Description |
@@ -115,6 +120,7 @@ All API routes are served from `server.ts` on `/api/*`.
 | `POST` | `/api/portfolio/parse-csv` | Parses Zerodha Kite / broker equity CSV text (`{ csvText, fileName }`) with zero Gemini quota usage and resolves live quotes. |
 | `POST` | `/api/portfolio/parse-screenshot` | Parses 1–15 base64 broker screenshots (`{ images }`) via Gemini Vision and validates prices against live quotes. |
 | `POST` | `/api/portfolio/analyze` | Evaluates up to 250 holdings (`{ holdings, totalPortfolioValue?, skipPortfolioSummary? }`) in batches of 40, applies volatility guardrails, and returns per-stock & portfolio `6M / 1Y / 5Y / 10Y` projections. |
+| `POST` | `/api/portfolio/rotation` | Scans equity holdings for `TRIM_PROFIT` / `EXIT_LAGGARD` rotation triggers and pairs freed rupee capital with top undervalued high-ROCE NSE replacement picks. |
 
 ### Mutual Fund Endpoints
 | Method | Endpoint | Description |

@@ -1,16 +1,23 @@
 import {
   AlertTriangle,
+  ArrowRightLeft,
   CheckCircle2,
   LineChart,
   Loader2,
+  Plus,
+  RefreshCw,
   ShieldAlert,
   Sparkles,
+  Star,
 } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import type {
+  CapitalRotationResponse,
   EnrichedHolding,
+  Exchange,
   MarketQuote,
   PortfolioAnalysisResponse,
+  RotationReplacementPick,
 } from '../types/market';
 import type { ChartOverlayLevels } from './MarketChartTerminal';
 import {
@@ -35,6 +42,22 @@ interface HealthDiagnosticsViewProps {
   aiProgress?: AiBatchProgress | null;
   aiError: string | null;
   onRunAiAnalysis: () => void;
+  rotationData: CapitalRotationResponse | null;
+  rotationLoading: boolean;
+  rotationError: string | null;
+  onRunCapitalRotation: () => void;
+  onToggleWatchlist: (
+    symbol: string,
+    companyName: string,
+    exchange: Exchange,
+    sector: string
+  ) => void;
+  isInWatchlist: (symbol: string) => boolean;
+  onStageRotationBuy: (
+    pick: RotationReplacementPick,
+    freedCapitalInr?: number,
+    sourceTicker?: string
+  ) => void;
   onInspectChart: (symbol: string, levels?: ChartOverlayLevels) => void;
 }
 
@@ -49,6 +72,13 @@ export function HealthDiagnosticsView({
   aiProgress = null,
   aiError,
   onRunAiAnalysis,
+  rotationData,
+  rotationLoading,
+  rotationError,
+  onRunCapitalRotation,
+  onToggleWatchlist,
+  isInWatchlist,
+  onStageRotationBuy,
   onInspectChart,
 }: HealthDiagnosticsViewProps) {
   const nifty6M = niftyQuote?.return6M ?? null;
@@ -458,6 +488,446 @@ export function HealthDiagnosticsView({
                 );
               })}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Smart Capital Rotation — Lock Gains & Redeploy */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="w-4 h-4 text-blue-700 shrink-0" />
+              <h3 className="text-base font-bold text-slate-900">
+                Smart Capital Rotation — Lock Gains &amp; Redeploy
+              </h3>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Identifies triple-digit / stretched winners and 200-DMA laggards to trim or exit, pairing each with high-ROCE, undervalued NSE replacements.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={rotationLoading || holdings.length === 0}
+            onClick={onRunCapitalRotation}
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            {rotationLoading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-700" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5 text-blue-700" />
+            )}
+            {rotationLoading
+              ? 'Scanning Rotation Setups...'
+              : rotationData
+              ? 'Refresh Rotation Scan'
+              : 'Scan Rotation Setups'}
+          </button>
+        </div>
+
+        {rotationError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-xs text-red-800 font-medium">
+            {rotationError}
+          </div>
+        )}
+
+        {rotationLoading && !rotationData && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-44 bg-slate-50 border border-slate-200 rounded-lg animate-pulse"
+              />
+            ))}
+          </div>
+        )}
+
+        {!rotationLoading && !rotationData && !rotationError && (
+          <div className="border border-slate-200 bg-slate-50/60 rounded-lg p-6 text-center space-y-2">
+            <p className="text-sm font-semibold text-slate-900">
+              Ready to scan {holdings.length}{' '}
+              {holdings.length === 1 ? 'holding' : 'holdings'} for capital rotation opportunities
+            </p>
+            <p className="text-xs text-slate-500 max-w-xl mx-auto">
+              Automatically triggers with &ldquo;Run AI Portfolio Audit&rdquo;, or click &ldquo;Scan Rotation Setups&rdquo; to pair profit trims and laggards with undervalued compounders.
+            </p>
+          </div>
+        )}
+
+        {rotationData && (
+          <div className="space-y-5">
+            {rotationData.quotaNotice && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-start gap-2.5 text-xs text-amber-900">
+                <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold">Quantitative Rotation Engine Active: </span>
+                  {rotationData.quotaNotice}
+                </div>
+              </div>
+            )}
+
+            {/* Rotation Summary KPI Strip */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
+                <div className="text-[11px] text-slate-500">Eligible Freed Capital</div>
+                <div className="text-lg font-bold font-mono-tabular text-slate-900 mt-0.5">
+                  {formatINR(rotationData.totalEligibleFreedCapital, true)}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Suggested trim/exit liquidity
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
+                <div className="text-[11px] text-slate-500">Rotation Triggers</div>
+                <div className="text-lg font-bold font-mono-tabular text-slate-900 mt-0.5">
+                  {rotationData.trimCount} Trims · {rotationData.exitCount} Exits
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Profit locks &amp; 200-DMA drags
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
+                <div className="text-[11px] text-slate-500">Portfolio ROCE Uplift</div>
+                <div className="text-lg font-bold font-mono-tabular text-green-700 mt-0.5">
+                  {rotationData.avgSourceRoce !== null
+                    ? `${rotationData.avgSourceRoce.toFixed(1)}%`
+                    : '—'}{' '}
+                  →{' '}
+                  {rotationData.avgReplacementRoce !== null
+                    ? `${rotationData.avgReplacementRoce.toFixed(1)}%`
+                    : '—'}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Source avg vs replacement avg
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
+                <div className="text-[11px] text-slate-500">Nifty 50 Reference (6M)</div>
+                <div
+                  className={`text-lg font-bold font-mono-tabular mt-0.5 ${
+                    (rotationData.benchmarkNifty6M ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'
+                  }`}
+                >
+                  {formatPercent(rotationData.benchmarkNifty6M)}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Updated{' '}
+                  {new Date(rotationData.generatedAt).toLocaleTimeString('en-IN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Paired Trim/Exit -> Undervalued Replacements */}
+            {rotationData.pairs.length > 0 ? (
+              <div className="space-y-4">
+                {rotationData.pairs.map((pair) => {
+                  const isTrim = pair.actionType === 'TRIM_PROFIT';
+                  const splitFreed =
+                    pair.candidates.length > 0
+                      ? Math.round(pair.estimatedFreedCapital / pair.candidates.length)
+                      : pair.estimatedFreedCapital;
+
+                  return (
+                    <div
+                      key={`${pair.sourceSymbol}_${pair.actionType}`}
+                      className="border border-slate-200 rounded-xl overflow-hidden grid grid-cols-1 lg:grid-cols-12"
+                    >
+                      {/* Source Position to Trim / Exit */}
+                      <div className="lg:col-span-4 bg-slate-50/80 p-4 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col justify-between gap-3">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`px-2 py-0.5 text-[11px] font-bold border rounded-md ${
+                                isTrim
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : 'bg-red-50 text-red-800 border-red-200'
+                              }`}
+                            >
+                              {isTrim ? 'TRIM PROFIT' : 'EXIT LAGGARD'}
+                            </span>
+                            <span className="text-[11px] font-mono-tabular font-semibold text-slate-600">
+                              Trim {pair.suggestedTrimPercent}%
+                            </span>
+                          </div>
+
+                          <div>
+                            <div className="text-sm font-bold text-slate-900">
+                              {pair.sourceTicker}
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {pair.sourceCompanyName} · {pair.sourceSector}
+                            </div>
+                          </div>
+
+                          <p className="text-xs text-slate-600 leading-relaxed">
+                            {pair.triggerReason}
+                          </p>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-200 grid grid-cols-2 gap-2 text-xs font-mono-tabular">
+                          <div>
+                            <div className="text-[10px] text-slate-400">Freed Capital</div>
+                            <div className="font-bold text-slate-900">
+                              {formatINR(pair.estimatedFreedCapital, true)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[10px] text-slate-400">Unrealized P&amp;L</div>
+                            <div
+                              className={`font-bold ${
+                                pair.unrealizedPnlPercent >= 0 ? 'text-green-700' : 'text-red-700'
+                              }`}
+                            >
+                              {formatPercent(pair.unrealizedPnlPercent)}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-slate-400">Current Value</div>
+                            <div className="text-slate-700">
+                              {formatINR(pair.currentValue, true)}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[10px] text-slate-400">Weight</div>
+                            <div className="text-slate-700">
+                              {pair.portfolioWeightPercent.toFixed(1)}%
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Paired Undervalued Replacements */}
+                      <div className="lg:col-span-8 p-4 bg-white">
+                        <div className="text-[11px] font-semibold text-slate-500 mb-3">
+                          Recommended Redeployment Candidates (~{formatINR(splitFreed, true)} each)
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {pair.candidates.map((cand) => {
+                            const inWatch = isInWatchlist(cand.symbol);
+                            return (
+                              <div
+                                key={cand.symbol}
+                                className="border border-slate-200 rounded-lg p-3.5 flex flex-col justify-between gap-3 bg-white"
+                              >
+                                <div className="space-y-2">
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="text-xs font-bold text-slate-900">
+                                          {cand.ticker}
+                                        </span>
+                                        {cand.sectorDiversificationBonus && (
+                                          <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 rounded">
+                                            Diversifier
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-slate-500 truncate">
+                                        {cand.companyName} · {cand.sector}
+                                      </div>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                      <div className="text-[10px] text-slate-400">Score</div>
+                                      <div className="text-xs font-bold font-mono-tabular text-blue-800">
+                                        {cand.undervaluedScore}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-4 gap-1.5 text-[11px] font-mono-tabular bg-slate-50 border border-slate-100 rounded p-2">
+                                    <div>
+                                      <div className="text-[10px] text-slate-400">LTP</div>
+                                      <div className="font-semibold text-slate-900">
+                                        {formatINR(cand.livePrice)}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] text-slate-400">ROCE</div>
+                                      <div className="font-semibold text-slate-800">
+                                        {cand.roce !== null ? `${cand.roce.toFixed(1)}%` : '—'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] text-slate-400">P/E</div>
+                                      <div className="font-semibold text-slate-800">
+                                        {cand.peRatio !== null ? `${cand.peRatio.toFixed(1)}x` : '—'}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <div className="text-[10px] text-slate-400">RSI</div>
+                                      <div className="font-semibold text-slate-800">
+                                        {cand.rsi14 !== null ? cand.rsi14.toFixed(1) : '—'}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                                    {cand.rotationThesis}
+                                  </p>
+                                </div>
+
+                                <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between gap-2">
+                                  <div className="text-[11px] font-mono-tabular">
+                                    <span className="text-green-700 font-semibold">
+                                      T: {formatINR(cand.suggestedTarget)}
+                                    </span>
+                                    <span className="mx-1.5 text-slate-300">·</span>
+                                    <span className="text-red-700 font-semibold">
+                                      SL: {formatINR(cand.suggestedStopLoss)}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onInspectChart(cand.symbol, {
+                                          targetPrice: cand.suggestedTarget,
+                                          stopLoss: cand.suggestedStopLoss,
+                                        })
+                                      }
+                                      className="px-2 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-50 whitespace-nowrap shrink-0"
+                                      title="Inspect Chart & Target/SL"
+                                    >
+                                      Chart
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onToggleWatchlist(
+                                          cand.symbol,
+                                          cand.companyName,
+                                          cand.exchange,
+                                          cand.sector
+                                        )
+                                      }
+                                      className={`p-1 border rounded transition-colors shrink-0 ${
+                                        inWatch
+                                          ? 'bg-amber-50 border-amber-200 text-amber-600'
+                                          : 'bg-white border-slate-200 text-slate-400 hover:text-slate-700'
+                                      }`}
+                                      title={inWatch ? 'Remove Watchlist' : 'Add to Watchlist'}
+                                    >
+                                      <Star
+                                        className={`w-3.5 h-3.5 ${inWatch ? 'fill-amber-500' : ''}`}
+                                      />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onStageRotationBuy(cand, splitFreed, pair.sourceTicker)
+                                      }
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-blue-700 rounded hover:bg-blue-800 whitespace-nowrap shrink-0"
+                                    >
+                                      <Plus className="w-3 h-3" /> Stage Buy
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="p-4 bg-emerald-50/70 border border-emerald-200 rounded-lg flex items-start gap-2.5 text-xs text-emerald-900">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-semibold">No Forced Rotation Triggers: </span>
+                    None of your holdings currently show extreme over-extension or chronic 200-DMA breakdown. Below are top undervalued NSE additions for fresh capital deployment.
+                  </div>
+                </div>
+
+                {rotationData.standaloneIdeas.length > 0 && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {rotationData.standaloneIdeas.map((idea) => {
+                      const inWatch = isInWatchlist(idea.symbol);
+                      return (
+                        <div
+                          key={idea.symbol}
+                          className="border border-slate-200 rounded-lg p-3.5 flex flex-col justify-between gap-2.5 bg-white"
+                        >
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <span className="text-xs font-bold text-slate-900">
+                                  {idea.ticker}
+                                </span>
+                                <span className="text-[11px] text-slate-500 ml-2">
+                                  {idea.companyName} · {idea.sector}
+                                </span>
+                              </div>
+                              <span className="text-xs font-bold font-mono-tabular text-blue-800">
+                                Score {idea.undervaluedScore}
+                              </span>
+                            </div>
+                            <div className="text-[11px] font-mono-tabular text-slate-600">
+                              LTP {formatINR(idea.livePrice)} · ROCE{' '}
+                              {idea.roce !== null ? `${idea.roce.toFixed(1)}%` : '—'} · P/E{' '}
+                              {idea.peRatio !== null ? `${idea.peRatio.toFixed(1)}x` : '—'} · RSI{' '}
+                              {idea.rsi14 !== null ? idea.rsi14.toFixed(1) : '—'}
+                            </div>
+                            <p className="text-[11px] text-slate-600 leading-relaxed">
+                              {idea.rotationThesis}
+                            </p>
+                          </div>
+                          <div className="flex items-center justify-end gap-1.5 pt-2 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onInspectChart(idea.symbol, {
+                                  targetPrice: idea.suggestedTarget,
+                                  stopLoss: idea.suggestedStopLoss,
+                                })
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-50 whitespace-nowrap shrink-0"
+                            >
+                              Chart
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onToggleWatchlist(
+                                  idea.symbol,
+                                  idea.companyName,
+                                  idea.exchange,
+                                  idea.sector
+                                )
+                              }
+                              className={`p-1 border rounded transition-colors shrink-0 ${
+                                inWatch
+                                  ? 'bg-amber-50 border-amber-200 text-amber-600'
+                                  : 'bg-white border-slate-200 text-slate-400 hover:text-slate-700'
+                              }`}
+                            >
+                              <Star className={`w-3.5 h-3.5 ${inWatch ? 'fill-amber-500' : ''}`} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onStageRotationBuy(idea)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium text-white bg-blue-700 rounded hover:bg-blue-800 whitespace-nowrap shrink-0"
+                            >
+                              <Plus className="w-3 h-3" /> Stage Buy
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
