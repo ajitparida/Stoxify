@@ -184,6 +184,10 @@ export type ScreenerPreset =
 export type AiRatingVerdict = 'BUY' | 'HOLD' | 'EXIT';
 
 export interface HorizonProjection {
+  return1MPercent?: number;
+  value1M?: number;
+  return3MPercent?: number;
+  value3M?: number;
   return6MPercent: number;
   value6M: number;
   return1YPercent: number;

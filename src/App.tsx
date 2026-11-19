@@ -747,6 +747,8 @@ export default function App() {
 
           const qtyMap = new Map(uniqueSortedHoldings.map((h) => [h.symbol.toUpperCase(), h.quantity]));
           let aggBase = 0;
+          let agg1m = 0;
+          let agg3m = 0;
           let agg6m = 0;
           let agg1y = 0;
           let agg5y = 0;
@@ -757,6 +759,8 @@ export default function App() {
             const qty = qtyMap.get(symKey) ?? 0;
             if (!rt.projection || posVal <= 0 || qty <= 0) continue;
             aggBase += posVal;
+            agg1m += typeof rt.projection.value1M === 'number' ? qty * rt.projection.value1M : posVal;
+            agg3m += typeof rt.projection.value3M === 'number' ? qty * rt.projection.value3M : posVal;
             agg6m += qty * rt.projection.value6M;
             agg1y += qty * rt.projection.value1Y;
             agg5y += qty * rt.projection.value5Y;
@@ -769,6 +773,10 @@ export default function App() {
             portfolioProjection:
               aggBase > 0
                 ? {
+                    return1MPercent: Number((((agg1m - aggBase) / aggBase) * 100).toFixed(1)),
+                    value1M: Math.round(agg1m),
+                    return3MPercent: Number((((agg3m - aggBase) / aggBase) * 100).toFixed(1)),
+                    value3M: Math.round(agg3m),
                     return6MPercent: Number((((agg6m - aggBase) / aggBase) * 100).toFixed(1)),
                     value6M: Math.round(agg6m),
                     return1YPercent: Number((((agg1y - aggBase) / aggBase) * 100).toFixed(1)),

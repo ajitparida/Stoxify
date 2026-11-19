@@ -278,42 +278,62 @@ export function HealthDiagnosticsView({
                 <div className="p-4 border border-slate-200 rounded-lg bg-white space-y-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="text-xs font-bold text-slate-900">
-                      Equity Portfolio Horizon Forecast (6M · 1Y · 5Y · 10Y)
+                      Equity Portfolio Horizon Forecast (1M · 3M · 6M · 1Y · 5Y · 10Y)
                     </div>
                     <div className="text-[11px] text-slate-500">
                       {aiAnalysis.portfolioProjection.basisNote ||
                         'Capital-weighted model forecast (not guaranteed returns)'}
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {(
-                      [
-                        {
-                          label: 'Next 6 Months',
-                          val: aiAnalysis.portfolioProjection.value6M,
-                          pct: aiAnalysis.portfolioProjection.return6MPercent,
-                          suffix: 'est. return',
-                        },
-                        {
-                          label: 'Next 1 Year',
-                          val: aiAnalysis.portfolioProjection.value1Y,
-                          pct: aiAnalysis.portfolioProjection.return1YPercent,
-                          suffix: 'est. return',
-                        },
-                        {
-                          label: '5-Year Outlook',
-                          val: aiAnalysis.portfolioProjection.value5Y,
-                          pct: aiAnalysis.portfolioProjection.cagr5YPercent,
-                          suffix: 'CAGR',
-                        },
-                        {
-                          label: '10-Year Outlook',
-                          val: aiAnalysis.portfolioProjection.value10Y,
-                          pct: aiAnalysis.portfolioProjection.cagr10YPercent,
-                          suffix: 'CAGR',
-                        },
-                      ] as const
-                    ).map((h) => (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    {[
+                      ...(typeof aiAnalysis.portfolioProjection.value1M === 'number' &&
+                      typeof aiAnalysis.portfolioProjection.return1MPercent === 'number'
+                        ? [
+                            {
+                              label: 'Next 1 Month',
+                              val: aiAnalysis.portfolioProjection.value1M,
+                              pct: aiAnalysis.portfolioProjection.return1MPercent,
+                              suffix: 'est. return',
+                            },
+                          ]
+                        : []),
+                      ...(typeof aiAnalysis.portfolioProjection.value3M === 'number' &&
+                      typeof aiAnalysis.portfolioProjection.return3MPercent === 'number'
+                        ? [
+                            {
+                              label: 'Next 3 Months',
+                              val: aiAnalysis.portfolioProjection.value3M,
+                              pct: aiAnalysis.portfolioProjection.return3MPercent,
+                              suffix: 'est. return',
+                            },
+                          ]
+                        : []),
+                      {
+                        label: 'Next 6 Months',
+                        val: aiAnalysis.portfolioProjection.value6M,
+                        pct: aiAnalysis.portfolioProjection.return6MPercent,
+                        suffix: 'est. return',
+                      },
+                      {
+                        label: 'Next 1 Year',
+                        val: aiAnalysis.portfolioProjection.value1Y,
+                        pct: aiAnalysis.portfolioProjection.return1YPercent,
+                        suffix: 'est. return',
+                      },
+                      {
+                        label: '5-Year Outlook',
+                        val: aiAnalysis.portfolioProjection.value5Y,
+                        pct: aiAnalysis.portfolioProjection.cagr5YPercent,
+                        suffix: 'CAGR',
+                      },
+                      {
+                        label: '10-Year Outlook',
+                        val: aiAnalysis.portfolioProjection.value10Y,
+                        pct: aiAnalysis.portfolioProjection.cagr10YPercent,
+                        suffix: 'CAGR',
+                      },
+                    ].map((h) => (
                       <div
                         key={h.label}
                         className="p-3 bg-slate-50 border border-slate-200 rounded-lg"
@@ -439,37 +459,57 @@ export function HealthDiagnosticsView({
                       {item.projection && (
                         <div className="pt-1.5">
                           <div className="text-[11px] font-semibold text-slate-700 mb-1.5">
-                            Price &amp; Return Outlook (6M · 1Y · 5Y · 10Y)
+                            Price &amp; Return Outlook (1M · 3M · 6M · 1Y · 5Y · 10Y)
                           </div>
-                          <div className="grid grid-cols-4 gap-2 text-[11px]">
-                            {(
-                              [
-                                {
-                                  horizon: '6M',
-                                  price: item.projection.value6M,
-                                  pct: item.projection.return6MPercent,
-                                  isCagr: false,
-                                },
-                                {
-                                  horizon: '1Y',
-                                  price: item.projection.value1Y,
-                                  pct: item.projection.return1YPercent,
-                                  isCagr: false,
-                                },
-                                {
-                                  horizon: '5Y',
-                                  price: item.projection.value5Y,
-                                  pct: item.projection.cagr5YPercent,
-                                  isCagr: true,
-                                },
-                                {
-                                  horizon: '10Y',
-                                  price: item.projection.value10Y,
-                                  pct: item.projection.cagr10YPercent,
-                                  isCagr: true,
-                                },
-                              ] as const
-                            ).map((cell) => (
+                          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-[11px]">
+                            {[
+                              ...(typeof item.projection.value1M === 'number' &&
+                              typeof item.projection.return1MPercent === 'number'
+                                ? [
+                                    {
+                                      horizon: '1M',
+                                      price: item.projection.value1M,
+                                      pct: item.projection.return1MPercent,
+                                      isCagr: false,
+                                    },
+                                  ]
+                                : []),
+                              ...(typeof item.projection.value3M === 'number' &&
+                              typeof item.projection.return3MPercent === 'number'
+                                ? [
+                                    {
+                                      horizon: '3M',
+                                      price: item.projection.value3M,
+                                      pct: item.projection.return3MPercent,
+                                      isCagr: false,
+                                    },
+                                  ]
+                                : []),
+                              {
+                                horizon: '6M',
+                                price: item.projection.value6M,
+                                pct: item.projection.return6MPercent,
+                                isCagr: false,
+                              },
+                              {
+                                horizon: '1Y',
+                                price: item.projection.value1Y,
+                                pct: item.projection.return1YPercent,
+                                isCagr: false,
+                              },
+                              {
+                                horizon: '5Y',
+                                price: item.projection.value5Y,
+                                pct: item.projection.cagr5YPercent,
+                                isCagr: true,
+                              },
+                              {
+                                horizon: '10Y',
+                                price: item.projection.value10Y,
+                                pct: item.projection.cagr10YPercent,
+                                isCagr: true,
+                              },
+                            ].map((cell) => (
                               <div
                                 key={cell.horizon}
                                 className="px-2 py-1.5 bg-slate-50 border border-slate-200 rounded"

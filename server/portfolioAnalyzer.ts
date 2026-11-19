@@ -74,6 +74,8 @@ function isQuotaOrRateLimitError(err: unknown): boolean {
 }
 
 interface RawGeminiRating extends HoldingAiRating {
+  p1m?: number;
+  p3m?: number;
   p6m?: number;
   p1y?: number;
   cagr5y?: number;
@@ -88,7 +90,14 @@ function buildStockProjection(
   t: EnrichedTelemetryItem,
   rating: 'BUY' | 'HOLD' | 'EXIT',
   suggestedTarget: number,
-  aiHint?: { p6m?: number; p1y?: number; cagr5y?: number; cagr10y?: number }
+  aiHint?: {
+    p1m?: number;
+    p3m?: number;
+    p6m?: number;
+    p1y?: number;
+    cagr5y?: number;
+    cagr10y?: number;
+  }
 ): HorizonProjection {
   const live = Math.max(0.01, t.livePrice);
   const beta = clampNum(t.beta || 1, 0.6, 1.75);
@@ -138,9 +147,33 @@ function buildStockProjection(
       ? clampNum(aiHint.cagr10y * 0.5 + base10yCagr * 0.5, 5, 18.5)
       : base10yCagr;
 
+  const comp1m = (Math.pow(Math.max(0.5, 1 + r6m / 100), 1 / 6) - 1) * 100;
+  const comp3m = (Math.pow(Math.max(0.5, 1 + r6m / 100), 0.5) - 1) * 100;
+  const rsiVal = t.rsi14 ?? 50;
+  const rsi1mNudge =
+    rsiVal >= 74 ? -1.1 : rsiVal <= 35 && rating !== 'EXIT' ? 1.1 : 0;
+  const mom1mNudge = clampNum((t.return1M ?? 0) * 0.08, -2.2, 2.2);
+  const mom3mNudge = clampNum((t.return3M ?? 0) * 0.08, -3.0, 3.0);
+
+  const base1m = clampNum(comp1m + rsi1mNudge + mom1mNudge, -9, 12);
+  const base3m = clampNum(comp3m + mom3mNudge, -14, 19);
+
+  const r1m =
+    typeof aiHint?.p1m === 'number' && Number.isFinite(aiHint.p1m)
+      ? clampNum(aiHint.p1m * 0.5 + base1m * 0.5, -9, 12)
+      : base1m;
+  const r3m =
+    typeof aiHint?.p3m === 'number' && Number.isFinite(aiHint.p3m)
+      ? clampNum(aiHint.p3m * 0.5 + base3m * 0.5, -14, 19)
+      : base3m;
+
   const final1y = clampNum(r1y, Math.max(-22, r6m - 8), 42 * Math.min(1.15, beta * 0.95 + 0.15));
 
   return {
+    return1MPercent: Number(r1m.toFixed(1)),
+    value1M: Number((live * (1 + r1m / 100)).toFixed(2)),
+    return3MPercent: Number(r3m.toFixed(1)),
+    value3M: Number((live * (1 + r3m / 100)).toFixed(2)),
     return6MPercent: Number(r6m.toFixed(1)),
     value6M: Number((live * (1 + r6m / 100)).toFixed(2)),
     return1YPercent: Number(final1y.toFixed(1)),
@@ -350,11 +383,11 @@ async function evaluateTelemetryBatch(params: {
       : 'Return portfolio overallSummary, diversificationNote, actionPriority.'
     : 'Use short placeholder strings for overallSummary, diversificationNote, and actionPriority (continuation batch).';
 
-  const prompt = `Rate EVERY Indian NSE/BSE stock in the JSON array (${compactTelemetry.length} items) with BUY, HOLD, or EXIT, and estimate expected return/CAGR forecasts (p6m, p1y, cagr5y, cagr10y).
+  const prompt = `Rate EVERY Indian NSE/BSE stock in the JSON array (${compactTelemetry.length} items) with BUY, HOLD, or EXIT, and estimate expected return/CAGR forecasts (p1m, p3m, p6m, p1y, cagr5y, cagr10y).
 Nifty50: level=${nifty ? nifty.price : 'N/A'}, 1D=${nifty ? `${nifty.changePercent}%` : 'N/A'}, 6M=${nifty?.return6M ?? 'N/A'}%.
 ${summaryHint}
 Fields: s=symbol, ltp=livePrice, pnlPct=unrealizedPnl%, wtPct=portfolioWeight%, rsi=RSI14, sma50/sma200, r6m=6M return%, roce, pe, beta.
-${RATING_CRITERIA} Keep headline/rationale/keyRisk concise (1 sentence max each) and set realistic INR suggestedTarget and suggestedStopLoss relative to ltp plus p6m/p1y total % and cagr5y/cagr10y annual % CAGR.
+${RATING_CRITERIA} Keep headline/rationale/keyRisk concise (1 sentence max each) and set realistic INR suggestedTarget and suggestedStopLoss relative to ltp plus p1m/p3m/p6m/p1y total % and cagr5y/cagr10y annual % CAGR.
 Data:${JSON.stringify(compactTelemetry)}`;
 
   const schema = {
@@ -376,6 +409,8 @@ Data:${JSON.stringify(compactTelemetry)}`;
             keyRisk: { type: Type.STRING },
             suggestedTarget: { type: Type.NUMBER },
             suggestedStopLoss: { type: Type.NUMBER },
+            p1m: { type: Type.NUMBER },
+            p3m: { type: Type.NUMBER },
             p6m: { type: Type.NUMBER },
             p1y: { type: Type.NUMBER },
             cagr5y: { type: Type.NUMBER },
@@ -473,7 +508,7 @@ function applyGuardrails(
     .map((r) => {
       const sym = String(r.symbol || '').toUpperCase();
       const t = telemetryBySymbol.get(sym);
-      const { p6m, p1y, cagr5y, cagr10y, ...cleanRating } = r;
+      const { p1m, p3m, p6m, p1y, cagr5y, cagr10y, ...cleanRating } = r;
 
       if (!t || t.livePrice <= 0) {
         return {
@@ -562,6 +597,8 @@ function applyGuardrails(
 
       const finalTarget = Number(target.toFixed(2));
       const projection = buildStockProjection(t, cleanRating.rating, finalTarget, {
+        p1m,
+        p3m,
         p6m,
         p1y,
         cagr5y,
@@ -756,6 +793,8 @@ export async function analyzePortfolioHoldings(
   const guardedRatings = applyGuardrails(combinedRawRatings, telemetryBySymbol);
 
   let baseValue = 0;
+  let sum1m = 0;
+  let sum3m = 0;
   let sum6m = 0;
   let sum1y = 0;
   let sum5y = 0;
@@ -765,6 +804,8 @@ export async function analyzePortfolioHoldings(
     if (!t || !r.projection || t.livePrice <= 0) continue;
     const posVal = t.quantity * t.livePrice;
     baseValue += posVal;
+    sum1m += t.quantity * (r.projection.value1M ?? t.livePrice);
+    sum3m += t.quantity * (r.projection.value3M ?? t.livePrice);
     sum6m += t.quantity * r.projection.value6M;
     sum1y += t.quantity * r.projection.value1Y;
     sum5y += t.quantity * r.projection.value5Y;
@@ -774,6 +815,10 @@ export async function analyzePortfolioHoldings(
   const portfolioProjection: HorizonProjection | undefined =
     baseValue > 0
       ? {
+          return1MPercent: Number((((sum1m - baseValue) / baseValue) * 100).toFixed(1)),
+          value1M: Math.round(sum1m),
+          return3MPercent: Number((((sum3m - baseValue) / baseValue) * 100).toFixed(1)),
+          value3M: Math.round(sum3m),
           return6MPercent: Number((((sum6m - baseValue) / baseValue) * 100).toFixed(1)),
           value6M: Math.round(sum6m),
           return1YPercent: Number((((sum1y - baseValue) / baseValue) * 100).toFixed(1)),
@@ -946,7 +991,7 @@ export async function analyzeSingleSymbolOutlook(
       volRatio: telemetryItem.volumeRatio,
     };
 
-    const prompt = `Evaluate this single Indian NSE/BSE stock or index (${telemetryItem.symbol}) and provide a forward outlook with 6-month (p6m), 1-year (p1y), 5-year annual CAGR (cagr5y), and 10-year annual CAGR (cagr10y) return estimates.
+    const prompt = `Evaluate this single Indian NSE/BSE stock or index (${telemetryItem.symbol}) and provide a forward outlook with 1-month (p1m), 3-month (p3m), 6-month (p6m), 1-year (p1y), 5-year annual CAGR (cagr5y), and 10-year annual CAGR (cagr10y) return estimates.
 Nifty50 benchmark: level=${nifty ? nifty.price : 'N/A'}, 1D=${nifty ? `${nifty.changePercent}%` : 'N/A'}, 6M=${nifty?.return6M ?? 'N/A'}%.
 ${RATING_CRITERIA}
 Give:
@@ -956,7 +1001,7 @@ Give:
 - rationale: 1-2 concise sentences citing live price, 50/200-DMA alignment, RSI-14, ROCE/valuation, or Nifty relative strength
 - keyRisk: 1 concise sentence on primary downside risk
 - suggestedTarget & suggestedStopLoss: realistic INR levels relative to LTP
-- p6m & p1y: expected cumulative percentage price return over next 6 months and 1 year
+- p1m, p3m, p6m & p1y: expected cumulative percentage price return over next 1 month, 3 months, 6 months, and 1 year
 - cagr5y & cagr10y: expected annualized CAGR percentage over 5-year and 10-year compounding horizons
 Data: ${JSON.stringify(compactPayload)}`;
 
@@ -970,6 +1015,8 @@ Data: ${JSON.stringify(compactPayload)}`;
         keyRisk: { type: Type.STRING },
         suggestedTarget: { type: Type.NUMBER },
         suggestedStopLoss: { type: Type.NUMBER },
+        p1m: { type: Type.NUMBER },
+        p3m: { type: Type.NUMBER },
         p6m: { type: Type.NUMBER },
         p1y: { type: Type.NUMBER },
         cagr5y: { type: Type.NUMBER },
@@ -983,6 +1030,8 @@ Data: ${JSON.stringify(compactPayload)}`;
         'keyRisk',
         'suggestedTarget',
         'suggestedStopLoss',
+        'p1m',
+        'p3m',
         'p6m',
         'p1y',
         'cagr5y',

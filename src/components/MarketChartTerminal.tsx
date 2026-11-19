@@ -1067,7 +1067,7 @@ export function MarketChartTerminal({
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-xs font-bold text-slate-900">
-                  Projected Stock Price &amp; Return Trajectory (6M · 1Y · 5Y · 10Y)
+                  Projected Stock Price &amp; Return Trajectory (1M · 3M · 6M · 1Y · 5Y · 10Y)
                 </div>
                 <div className="text-[11px] text-slate-500">
                   {outlook.projection.basisNote ||
@@ -1075,9 +1075,31 @@ export function MarketChartTerminal({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                 {(
                   [
+                    ...(typeof outlook.projection.value1M === 'number' &&
+                    typeof outlook.projection.return1MPercent === 'number'
+                      ? [
+                          {
+                            label: '1-Month Price',
+                            val: outlook.projection.value1M,
+                            pct: outlook.projection.return1MPercent,
+                            suffix: 'est. return',
+                          },
+                        ]
+                      : []),
+                    ...(typeof outlook.projection.value3M === 'number' &&
+                    typeof outlook.projection.return3MPercent === 'number'
+                      ? [
+                          {
+                            label: '3-Month Price',
+                            val: outlook.projection.value3M,
+                            pct: outlook.projection.return3MPercent,
+                            suffix: 'est. return',
+                          },
+                        ]
+                      : []),
                     {
                       label: '6-Month Price',
                       val: outlook.projection.value6M,
@@ -1102,7 +1124,7 @@ export function MarketChartTerminal({
                       pct: outlook.projection.cagr10YPercent,
                       suffix: 'CAGR',
                     },
-                  ] as const
+                  ]
                 ).map((horizon) => (
                   <div
                     key={horizon.label}
