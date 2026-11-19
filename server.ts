@@ -1,4 +1,5 @@
 import express from 'express';
+import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import {
@@ -454,11 +455,17 @@ async function startServer() {
     }
   });
 
-  if (process.env.NODE_ENV === 'production') {
-    const distPath = path.resolve(process.cwd(), 'dist');
+  const distPath = path.resolve(process.cwd(), 'dist');
+  const distIndexPath = path.join(distPath, 'index.html');
+  const runningCompiledServer = Boolean(process.argv[1]?.endsWith('server.js'));
+  const serveBuiltAssets =
+    process.env.NODE_ENV === 'production' ||
+    (runningCompiledServer && fs.existsSync(distIndexPath));
+
+  if (serveBuiltAssets) {
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(distIndexPath);
     });
   } else {
     const { createServer: createViteServer } = await import('vite');
