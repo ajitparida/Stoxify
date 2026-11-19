@@ -786,7 +786,23 @@ export interface ConfidencePillarDetail {
   summary: string;
 }
 
+export type ConfidenceAdjustmentCode =
+  | 'EARNINGS_IMMINENT'
+  | 'EARNINGS_UPCOMING'
+  | 'FUNDAMENTALS_FALLBACK'
+  | 'FUNDAMENTALS_PARTIAL';
+
+export interface ConfidenceAdjustment {
+  code: ConfidenceAdjustmentCode;
+  label: string;
+  delta: number;
+  reason: string;
+}
+
 export interface ConfidenceBreakdown {
+  baseScore?: number;
+  adjustments?: ConfidenceAdjustment[];
+  totalAdjustment?: number;
   overallScore: number;
   tier: 'Strong' | 'Moderate' | 'Caution';
   pillars: {

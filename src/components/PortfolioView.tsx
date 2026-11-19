@@ -14,7 +14,7 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { EnrichedHolding, HoldingAiRating, HoldingRecord } from '../types/market';
 import {
   formatINR,
@@ -58,8 +58,6 @@ const HEALTH_RANK: Record<EnrichedHolding['healthStatus'], number> = {
   'Dead Stock': 1,
 };
 
-const SECTOR_COLORS = ['#1D4ED8', '#0F766E', '#0284C7', '#D97706', '#475569', '#64748B'];
-
 export function PortfolioView({
   holdings,
   diagnostics,
@@ -77,6 +75,7 @@ export function PortfolioView({
   onPreloadDemo,
   onClearAll,
 }: PortfolioViewProps) {
+  const [subTab, setSubTab] = useState<'holdings' | 'dividends'>('holdings');
   const [filterText, setFilterText] = useState('');
   const [healthFilter, setHealthFilter] = useState<'All' | 'Healthy' | 'Watch' | 'Dead Stock'>('All');
   const [sectorFilter, setSectorFilter] = useState<string>('All');
@@ -315,7 +314,45 @@ export function PortfolioView({
         </div>
       </div>
 
+      {/* Focused Sub-Tab Navigation (Holdings | Dividends) */}
+      {holdings.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-5 py-3">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
+            <button
+              type="button"
+              onClick={() => setSubTab('holdings')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'holdings'
+                  ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Holdings ({holdings.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('dividends')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                subTab === 'dividends'
+                  ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              Dividends ({formatINR(diagnostics.totalExpectedAnnualDividends, true)}/yr)
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onOpenDiagnostics}
+            className="text-xs font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0 text-left sm:text-right"
+          >
+            Sector Allocation &amp; AI Audit →
+          </button>
+        </div>
+      )}
+
       {/* Holdings Table & Controls */}
+      {(subTab === 'holdings' || holdings.length === 0) && (
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 space-y-3">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -665,22 +702,29 @@ export function PortfolioView({
                             )}
                           </td>
                           {aiRatings.length > 0 && (
-                            <td className="py-2.5 px-3 whitespace-nowrap font-bold">
+                            <td className="py-2.5 px-3 whitespace-nowrap">
                               {(() => {
                                 const r = aiRatingMap.get(h.symbol.toUpperCase());
                                 if (!r) return <span className="text-slate-400 font-normal">—</span>;
                                 return (
-                                  <span
-                                    className={
-                                      r.rating === 'BUY'
-                                        ? 'text-green-700'
-                                        : r.rating === 'EXIT'
-                                        ? 'text-red-700'
-                                        : 'text-amber-700'
-                                    }
-                                  >
-                                    {r.rating}
-                                  </span>
+                                  <div className="flex items-center gap-1.5 font-mono-tabular">
+                                    <span
+                                      className={`font-bold ${
+                                        r.rating === 'BUY'
+                                          ? 'text-green-700'
+                                          : r.rating === 'EXIT'
+                                          ? 'text-red-700'
+                                          : 'text-amber-700'
+                                      }`}
+                                    >
+                                      {r.rating}
+                                    </span>
+                                    {r.confidence && (
+                                      <span className="text-[11px] text-slate-500">
+                                        {r.confidence.overallScore.toFixed(0)}%
+                                      </span>
+                                    )}
+                                  </div>
                                 );
                               })()}
                             </td>
@@ -717,9 +761,10 @@ export function PortfolioView({
           </div>
         )}
       </div>
+      )}
 
-      {/* Dividend Tracker Section */}
-      {holdings.length > 0 && (
+      {/* Dividend Tracker Tab */}
+      {holdings.length > 0 && subTab === 'dividends' && (
         <section
           aria-label="Dividend Tracker"
           className="bg-white border border-slate-200 rounded-xl p-6 space-y-5"
@@ -873,68 +918,6 @@ export function PortfolioView({
             </div>
           )}
         </section>
-      )}
-
-      {/* Bottom Sector Allocation Bar Chart */}
-      {diagnostics.sectorBreakdown.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">Sector Capital Allocation</h3>
-              <p className="text-xs text-slate-500">
-                Real-time portfolio weight distribution across NSE/BSE sectors
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onOpenDiagnostics}
-              className="text-xs font-medium text-blue-700 hover:underline"
-            >
-              Open Full Diagnostics →
-            </button>
-          </div>
-          <div className="h-[210px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={diagnostics.sectorBreakdown}
-                layout="vertical"
-                margin={{ top: 4, right: 24, left: 20, bottom: 4 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" horizontal={false} />
-                <XAxis
-                  type="number"
-                  domain={[0, 100]}
-                  tickFormatter={(v: number) => `${v}%`}
-                  tick={{ fontSize: 11, fill: '#64748B', fontFamily: 'JetBrains Mono' }}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="sector"
-                  width={130}
-                  tick={{ fontSize: 12, fill: '#0F172A' }}
-                  tickLine={false}
-                />
-                <Tooltip
-                  formatter={(v: unknown) => [`${Number(v).toFixed(1)}%`, 'Portfolio Weight']}
-                  contentStyle={{
-                    backgroundColor: '#FFFFFF',
-                    borderColor: '#E2E8F0',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                />
-                <Bar dataKey="weightPercent" radius={[0, 4, 4, 0]} barSize={18} isAnimationActive={false}>
-                  {diagnostics.sectorBreakdown.map((entry, idx) => (
-                    <Cell
-                      key={entry.sector}
-                      fill={SECTOR_COLORS[idx % SECTOR_COLORS.length]}
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
       )}
     </div>
   );

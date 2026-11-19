@@ -55,11 +55,23 @@ export function ConfidenceBreakdownBar({
   variant = 'expanded',
   showDisclaimer = false,
 }: ConfidenceBreakdownBarProps) {
+  const adjustments = confidence.adjustments ?? [];
+  const totalAdjustment = confidence.totalAdjustment ?? 0;
+  const baseScore = confidence.baseScore ?? confidence.overallScore;
+  const hasDeductions = adjustments.length > 0 && totalAdjustment < 0;
+
   if (variant === 'compact') {
     return (
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="text-[11px] font-medium text-slate-500">Model Confidence</span>
+          <span className="text-[11px] font-medium text-slate-500">
+            Net Confidence
+            {hasDeductions && (
+              <span className="ml-1.5 font-mono-tabular text-[10px] text-amber-700 font-semibold">
+                (Base {baseScore.toFixed(0)}% {totalAdjustment} pts)
+              </span>
+            )}
+          </span>
           <span
             className={`font-mono-tabular font-bold ${getConfidenceScoreTone(
               confidence.overallScore
@@ -91,6 +103,18 @@ export function ConfidenceBreakdownBar({
             );
           })}
         </div>
+        {hasDeductions && (
+          <div className="text-[11px] text-amber-800 pt-0.5 leading-snug">
+            <span className="font-semibold">Deductions:</span>{' '}
+            {adjustments.map((adj, idx) => (
+              <span key={adj.code} title={adj.reason}>
+                {idx > 0 && <span className="mx-1 text-slate-300">·</span>}
+                <span>{adj.label}</span>{' '}
+                <span className="font-mono-tabular font-semibold">{adj.delta} pts</span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
@@ -106,13 +130,19 @@ export function ConfidenceBreakdownBar({
             Fixed institutional weights: Trend 30% · RS vs Nifty 25% · Momentum 20% · Fundamentals 25%
           </div>
         </div>
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2.5">
+          {hasDeductions && (
+            <span className="text-xs font-mono-tabular text-slate-500">
+              Base {baseScore.toFixed(1)}%{' '}
+              <span className="text-amber-700 font-semibold">{totalAdjustment} pts</span> →
+            </span>
+          )}
           <span
             className={`text-xl font-bold font-mono-tabular ${getConfidenceScoreTone(
               confidence.overallScore
             )}`}
           >
-            {confidence.overallScore.toFixed(2)}%
+            {confidence.overallScore.toFixed(1)}%
           </span>
           <span
             className={`px-2 py-0.5 text-[11px] font-semibold border rounded-md ${getConfidenceBadgeClasses(
@@ -156,6 +186,39 @@ export function ConfidenceBreakdownBar({
           );
         })}
       </div>
+
+      {hasDeductions && (
+        <div className="pt-2.5 border-t border-slate-100 space-y-1">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+            <span className="font-semibold text-amber-800">
+              Risk &amp; Data-Completeness Deductions
+            </span>
+            <span className="font-mono-tabular text-slate-600">
+              Base {baseScore.toFixed(1)}% {totalAdjustment} pts = Net{' '}
+              <span className="font-semibold text-slate-900">
+                {confidence.overallScore.toFixed(1)}%
+              </span>
+            </span>
+          </div>
+          <div className="divide-y divide-slate-100">
+            {adjustments.map((adj) => (
+              <div
+                key={adj.code}
+                className="py-1 flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px]"
+              >
+                <div className="text-slate-700">
+                  <span className="font-semibold text-slate-900">{adj.label}</span>
+                  <span className="mx-1.5 text-slate-300">·</span>
+                  <span className="text-slate-600">{adj.reason}</span>
+                </div>
+                <span className="font-mono-tabular font-semibold text-amber-700 shrink-0">
+                  {adj.delta} pts
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {showDisclaimer && (
         <p className="text-[11px] text-slate-500 pt-1">

@@ -786,7 +786,7 @@ export function MarketChartTerminal({
               </h3>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
-              6-month, 1-year, 5-year, and 10-year stock price forecast calibrated against live telemetry &amp; Nifty 50 strength
+              1M, 3M, 6M, 1Y, 5Y, and 10Y stock price forecast unified with Net Confidence &amp; Nifty 50 relative strength
               {syncedPortfolioKey ? ' · Synced with Portfolio Audit' : ''}
               {outlook?.analysisSource === 'fallback_engine' ? ' · Quantitative Engine' : ''}
               {outlook?.analyzedAt && (
@@ -993,12 +993,18 @@ export function MarketChartTerminal({
                       {outlook.rating}
                     </span>
                     {outlook.confidence ? (
-                      <span
-                        className={`text-xs font-mono-tabular font-bold ${getConfidenceScoreTone(
-                          outlook.confidence.overallScore
-                        )}`}
-                      >
-                        {outlook.confidence.overallScore.toFixed(1)}% Model Confidence
+                      <span className="text-xs font-mono-tabular text-slate-600">
+                        <span
+                          className={`font-bold ${getConfidenceScoreTone(
+                            outlook.confidence.overallScore
+                          )}`}
+                        >
+                          {outlook.confidence.overallScore.toFixed(1)}% Net Confidence
+                        </span>
+                        <span className="mx-1.5 text-slate-300">·</span>
+                        <span className="font-medium text-slate-700 font-sans">
+                          {outlook.conviction} Conviction
+                        </span>
                       </span>
                     ) : (
                       <span className="text-xs font-medium text-slate-600">

@@ -1,16 +1,29 @@
+import { useState } from 'react';
 import {
   AlertTriangle,
   ArrowRightLeft,
   CheckCircle2,
   LineChart,
   Loader2,
+  PieChart as PieChartIcon,
   Plus,
   RefreshCw,
   ShieldAlert,
   Sparkles,
   Star,
 } from 'lucide-react';
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import type {
   CapitalRotationResponse,
   EnrichedHolding,
@@ -39,10 +52,14 @@ interface AiBatchProgress {
   totalCount: number;
 }
 
+export type DiagnosticsSubTab = 'audit' | 'rotation' | 'allocation';
+
 interface HealthDiagnosticsViewProps {
   holdings: EnrichedHolding[];
   diagnostics: PortfolioDiagnosticsSummary;
   niftyQuote: MarketQuote | null;
+  activeSubTab?: DiagnosticsSubTab;
+  onChangeSubTab?: (tab: DiagnosticsSubTab) => void;
   aiAnalysis: PortfolioAnalysisResponse | null;
   aiLoading: boolean;
   aiProgress?: AiBatchProgress | null;
@@ -68,11 +85,14 @@ interface HealthDiagnosticsViewProps {
 }
 
 const CAP_COLORS = ['#1D4ED8', '#0284C7', '#0F766E', '#64748B'];
+const SECTOR_COLORS = ['#1D4ED8', '#0F766E', '#0284C7', '#D97706', '#475569', '#64748B'];
 
 export function HealthDiagnosticsView({
   holdings,
   diagnostics,
   niftyQuote,
+  activeSubTab,
+  onChangeSubTab,
   aiAnalysis,
   aiLoading,
   aiProgress = null,
@@ -87,15 +107,27 @@ export function HealthDiagnosticsView({
   onStageRotationBuy,
   onInspectChart,
 }: HealthDiagnosticsViewProps) {
+  const [internalTab, setInternalTab] = useState<DiagnosticsSubTab>('audit');
+  const [verdictFilter, setVerdictFilter] = useState<'ALL' | 'BUY' | 'HOLD' | 'EXIT'>('ALL');
+  const currentTab = activeSubTab ?? internalTab;
+  const setTab = (next: DiagnosticsSubTab) => {
+    setInternalTab(next);
+    onChangeSubTab?.(next);
+  };
+
   const nifty6M = niftyQuote?.return6M ?? null;
   const totalEquityValue = holdings.reduce((sum, h) => sum + h.currentValue, 0);
 
-  const ratingBySymbol = new Map(
-    (aiAnalysis?.ratings ?? []).map((r) => [r.symbol.toUpperCase(), r])
+  const visibleRatings = (aiAnalysis?.ratings ?? []).filter(
+    (r) => verdictFilter === 'ALL' || r.rating === verdictFilter
   );
 
+  const buyCount = (aiAnalysis?.ratings ?? []).filter((r) => r.rating === 'BUY').length;
+  const holdCount = (aiAnalysis?.ratings ?? []).filter((r) => r.rating === 'HOLD').length;
+  const exitCount = (aiAnalysis?.ratings ?? []).filter((r) => r.rating === 'EXIT').length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Top Diagnostic Summary */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5">
@@ -141,7 +173,60 @@ export function HealthDiagnosticsView({
         </div>
       </div>
 
-      {/* AI-Powered Buy / Hold / Exit Portfolio Audit */}
+      {/* Focused Sub-Tab Bar */}
+      <div className="bg-white border border-slate-200 rounded-xl px-5 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit overflow-x-auto max-w-full">
+          <button
+            type="button"
+            onClick={() => setTab('audit')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+              currentTab === 'audit'
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            <span>AI Portfolio Audit</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('rotation')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+              currentTab === 'rotation'
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 shrink-0" />
+            <span>
+              Capital Rotation
+              {rotationData && rotationData.pairs.length > 0
+                ? ` (${rotationData.pairs.length})`
+                : ''}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab('allocation')}
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+              currentTab === 'allocation'
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <PieChartIcon className="w-3.5 h-3.5 shrink-0" />
+            <span>Allocation &amp; Hedge</span>
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-500 font-mono-tabular">
+          {holdings.length} {holdings.length === 1 ? 'position' : 'positions'} · Beta{' '}
+          {diagnostics.weightedBeta.toFixed(2)}x
+        </div>
+      </div>
+
+      {/* TAB 1: AI-Powered Buy / Hold / Exit Portfolio Audit */}
+      {currentTab === 'audit' && (
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -356,9 +441,39 @@ export function HealthDiagnosticsView({
               )}
             </div>
 
+            {/* Verdict Filter Strip */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
+                {(
+                  [
+                    { key: 'ALL', label: `All (${aiAnalysis.ratings.length})` },
+                    { key: 'BUY', label: `BUY (${buyCount})` },
+                    { key: 'HOLD', label: `HOLD (${holdCount})` },
+                    { key: 'EXIT', label: `EXIT (${exitCount})` },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => setVerdictFilter(opt.key)}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                      verdictFilter === opt.key
+                        ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <div className="text-[11px] text-slate-500">
+                Verdicts &amp; conviction unified with Net Confidence Score
+              </div>
+            </div>
+
             {/* Per-Stock Rating Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {aiAnalysis.ratings.map((item, idx) => {
+              {visibleRatings.map((item, idx) => {
                 const holding = holdings.find(
                   (h) => h.symbol.toUpperCase() === item.symbol.toUpperCase()
                 );
@@ -379,13 +494,17 @@ export function HealthDiagnosticsView({
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500">
                             {item.confidence ? (
-                              <span
-                                className={`font-mono-tabular font-bold ${getConfidenceScoreTone(
-                                  item.confidence.overallScore
-                                )}`}
-                              >
-                                {item.confidence.overallScore.toFixed(1)}% Confidence
-                              </span>
+                              <>
+                                <span
+                                  className={`font-mono-tabular font-bold ${getConfidenceScoreTone(
+                                    item.confidence.overallScore
+                                  )}`}
+                                >
+                                  {item.confidence.overallScore.toFixed(1)}% Net
+                                </span>
+                                <span>·</span>
+                                <span>{item.conviction} Conviction</span>
+                              </>
                             ) : (
                               <span>{item.conviction} Conviction</span>
                             )}
@@ -570,15 +689,10 @@ export function HealthDiagnosticsView({
           </div>
         )}
       </div>
+      )}
 
-      {/* Portfolio 80/20 Cash Reserve & Live Index Bear Put Spread Hedge Calculator */}
-      <PortfolioHedgeCalculator
-        totalEquityValue={totalEquityValue}
-        weightedBeta={diagnostics.weightedBeta}
-        niftyQuote={niftyQuote}
-      />
-
-      {/* Smart Capital Rotation — Lock Gains & Redeploy */}
+      {/* TAB 2: Smart Capital Rotation — Lock Gains & Redeploy */}
+      {currentTab === 'rotation' && (
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -1017,264 +1131,196 @@ export function HealthDiagnosticsView({
           </div>
         )}
       </div>
+      )}
 
-      {/* Concentration & Dead-Stock Alerts */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-bold text-slate-900">
-                Actionable Portfolio Risk &amp; Dead-Stock Alerts
-              </h3>
-              <p className="text-xs text-slate-500">
-                Automated flags evaluating concentration limits, 200-DMA breakdowns, and benchmark drag
-              </p>
+      {/* TAB 3: Allocation, Risk Alerts & 80/20 Hedge Calculator */}
+      {currentTab === 'allocation' && (
+        <div className="space-y-5">
+          {/* Authoritative Sector Allocation + Market-Cap Mix */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-6">
+              <div className="mb-4">
+                <h3 className="text-sm font-bold text-slate-900">Sector Capital Allocation</h3>
+                <p className="text-xs text-slate-500">
+                  Real-time equity weight distribution across NSE/BSE sectors
+                </p>
+              </div>
+              {diagnostics.sectorBreakdown.length === 0 ? (
+                <div className="h-[220px] flex items-center justify-center text-xs text-slate-400">
+                  No active equity holdings
+                </div>
+              ) : (
+                <div className="h-[230px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={diagnostics.sectorBreakdown}
+                      layout="vertical"
+                      margin={{ top: 4, right: 24, left: 16, bottom: 4 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" horizontal={false} />
+                      <XAxis
+                        type="number"
+                        domain={[0, 100]}
+                        tickFormatter={(v: number) => `${v}%`}
+                        tick={{ fontSize: 11, fill: '#64748B', fontFamily: 'JetBrains Mono' }}
+                      />
+                      <YAxis
+                        type="category"
+                        dataKey="sector"
+                        width={130}
+                        tick={{ fontSize: 12, fill: '#0F172A' }}
+                        tickLine={false}
+                      />
+                      <Tooltip
+                        formatter={(v: unknown) => [`${Number(v).toFixed(1)}%`, 'Portfolio Weight']}
+                        contentStyle={{
+                          backgroundColor: '#FFFFFF',
+                          borderColor: '#E2E8F0',
+                          borderRadius: '8px',
+                          fontSize: '12px',
+                        }}
+                      />
+                      <Bar
+                        dataKey="weightPercent"
+                        radius={[0, 4, 4, 0]}
+                        barSize={18}
+                        isAnimationActive={false}
+                      >
+                        {diagnostics.sectorBreakdown.map((entry, idx) => (
+                          <Cell
+                            key={entry.sector}
+                            fill={SECTOR_COLORS[idx % SECTOR_COLORS.length]}
+                          />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+
+            {/* Market Cap Mix Chart */}
+            <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col">
+              <h3 className="text-sm font-bold text-slate-900">Market-Cap Exposure</h3>
+              <p className="text-xs text-slate-500 mb-3">Allocation by SEBI market-cap tier</p>
+
+              {diagnostics.capMix.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center text-xs text-slate-400">
+                  No active holdings
+                </div>
+              ) : (
+                <>
+                  <div className="h-[175px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={diagnostics.capMix}
+                          dataKey="weightPercent"
+                          nameKey="cap"
+                          innerRadius={46}
+                          outerRadius={72}
+                          paddingAngle={2}
+                          isAnimationActive={false}
+                        >
+                          {diagnostics.capMix.map((entry, idx) => (
+                            <Cell key={entry.cap} fill={CAP_COLORS[idx % CAP_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          formatter={(val: unknown) => [`${Number(val).toFixed(1)}%`, 'Weight']}
+                          contentStyle={{
+                            backgroundColor: '#FFFFFF',
+                            borderColor: '#E2E8F0',
+                            borderRadius: '8px',
+                            fontSize: '12px',
+                          }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="space-y-2 mt-2 pt-3 border-t border-slate-100">
+                    {diagnostics.capMix.map((item, idx) => (
+                      <div key={item.cap} className="flex items-center justify-between text-xs">
+                        <div className="flex items-center gap-2 text-slate-700">
+                          <span
+                            className="w-2.5 h-2.5 rounded-xs shrink-0"
+                            style={{ backgroundColor: CAP_COLORS[idx % CAP_COLORS.length] }}
+                          />
+                          <span>{item.cap}</span>
+                        </div>
+                        <span className="font-mono-tabular font-semibold text-slate-900">
+                          {item.weightPercent.toFixed(1)}% · {formatINR(item.value, true)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
-          {diagnostics.concentrationAlerts.length === 0 ? (
-            <div className="py-10 text-center border border-slate-100 rounded-lg bg-slate-50/50 space-y-2">
-              <CheckCircle2 className="w-6 h-6 text-green-700 mx-auto" />
-              <div className="text-sm font-semibold text-slate-900">
-                No Critical Concentration or Dead-Stock Flags
-              </div>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Your holdings are diversified across sectors and holding above long-term momentum baselines.
+          {/* Concentration & Risk Alerts */}
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Concentration &amp; Dead-Stock Risk Alerts
+              </h3>
+              <p className="text-xs text-slate-500">
+                Automated flags evaluating single-stock concentration limits, 200-DMA breakdowns, and benchmark drag
               </p>
             </div>
-          ) : (
-            <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
-              {diagnostics.concentrationAlerts.map((alert, i) => (
-                <div
-                  key={i}
-                  className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                >
-                  <div className="flex items-start gap-3">
-                    {alert.severity === 'critical' ? (
-                      <AlertTriangle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
-                    ) : (
-                      <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                    )}
-                    <div>
-                      <div className="text-xs font-bold text-slate-900">{alert.title}</div>
-                      <div className="text-xs text-slate-600 mt-0.5">{alert.detail}</div>
-                    </div>
-                  </div>
-                  {alert.symbol && (
-                    <button
-                      type="button"
-                      onClick={() => onInspectChart(alert.symbol!)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg whitespace-nowrap shrink-0"
-                    >
-                      <LineChart className="w-3.5 h-3.5" /> Review Chart
-                    </button>
-                  )}
+
+            {diagnostics.concentrationAlerts.length === 0 ? (
+              <div className="py-8 text-center border border-slate-100 rounded-lg bg-slate-50/50 space-y-2">
+                <CheckCircle2 className="w-6 h-6 text-green-700 mx-auto" />
+                <div className="text-sm font-semibold text-slate-900">
+                  No Critical Concentration or Dead-Stock Flags
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Market Cap Mix Chart */}
-        <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col">
-          <h3 className="text-sm font-bold text-slate-900">Market-Cap Exposure</h3>
-          <p className="text-xs text-slate-500 mb-3">Allocation by SEBI market-cap tier</p>
-
-          {diagnostics.capMix.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-xs text-slate-400">
-              No active holdings
-            </div>
-          ) : (
-            <>
-              <div className="h-[180px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={diagnostics.capMix}
-                      dataKey="weightPercent"
-                      nameKey="cap"
-                      innerRadius={48}
-                      outerRadius={74}
-                      paddingAngle={2}
-                      isAnimationActive={false}
-                    >
-                      {diagnostics.capMix.map((entry, idx) => (
-                        <Cell key={entry.cap} fill={CAP_COLORS[idx % CAP_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      formatter={(val: unknown) => [`${Number(val).toFixed(1)}%`, 'Weight']}
-                      contentStyle={{
-                        backgroundColor: '#FFFFFF',
-                        borderColor: '#E2E8F0',
-                        borderRadius: '8px',
-                        fontSize: '12px',
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Your holdings are diversified across sectors and holding above long-term momentum baselines.
+                </p>
               </div>
-              <div className="space-y-2 mt-2 pt-3 border-t border-slate-100">
-                {diagnostics.capMix.map((item, idx) => (
-                  <div key={item.cap} className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2 text-slate-700">
-                      <span
-                        className="w-2.5 h-2.5 rounded-xs shrink-0"
-                        style={{ backgroundColor: CAP_COLORS[idx % CAP_COLORS.length] }}
-                      />
-                      <span>{item.cap}</span>
+            ) : (
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                {diagnostics.concentrationAlerts.map((alert, i) => (
+                  <div
+                    key={i}
+                    className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      {alert.severity === 'critical' ? (
+                        <AlertTriangle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                      ) : (
+                        <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      )}
+                      <div>
+                        <div className="text-xs font-bold text-slate-900">{alert.title}</div>
+                        <div className="text-xs text-slate-600 mt-0.5">{alert.detail}</div>
+                      </div>
                     </div>
-                    <span className="font-mono-tabular font-semibold text-slate-900">
-                      {item.weightPercent.toFixed(1)}% · {formatINR(item.value, true)}
-                    </span>
+                    {alert.symbol && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectChart(alert.symbol!)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg whitespace-nowrap shrink-0"
+                      >
+                        <LineChart className="w-3.5 h-3.5" /> Review Chart
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
-            </>
-          )}
-        </div>
-      </div>
+            )}
+          </div>
 
-      {/* Holding-by-Holding Technical & Benchmark Matrix */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100">
-          <h3 className="text-sm font-bold text-slate-900">
-            Position-Level Health &amp; Moving Average Matrix
-          </h3>
-          <p className="text-xs text-slate-500">
-            Compares every holding against its 50-DMA, 200-DMA, RSI-14, 6-month return, and AI verdict
-          </p>
+          {/* Portfolio 80/20 Cash Reserve & Live Index Bear Put Spread Hedge Calculator */}
+          <PortfolioHedgeCalculator
+            totalEquityValue={totalEquityValue}
+            weightedBeta={diagnostics.weightedBeta}
+            niftyQuote={niftyQuote}
+          />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
-                <th className="py-2.5 px-4">Stock</th>
-                <th className="py-2.5 px-3 text-right">LTP</th>
-                <th className="py-2.5 px-3 text-right">vs 50-DMA</th>
-                <th className="py-2.5 px-3 text-right">vs 200-DMA</th>
-                <th className="py-2.5 px-3 text-right">RSI (14)</th>
-                <th className="py-2.5 px-3 text-right">6M Return</th>
-                <th className="py-2.5 px-3 text-right">Confidence</th>
-                <th className="py-2.5 px-3">AI Rating</th>
-                <th className="py-2.5 px-4">Diagnostic Verdict</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {holdings.map((h) => {
-                const sma50Diff =
-                  h.quote?.sma50 && h.quote.sma50 > 0
-                    ? ((h.livePrice - h.quote.sma50) / h.quote.sma50) * 100
-                    : null;
-                const sma200Diff =
-                  h.quote?.sma200 && h.quote.sma200 > 0
-                    ? ((h.livePrice - h.quote.sma200) / h.quote.sma200) * 100
-                    : null;
-                const aiRating = ratingBySymbol.get(h.symbol.toUpperCase());
-                const confScore = aiRating?.confidence?.overallScore ?? h.quote?.confidence?.overallScore ?? null;
-
-                return (
-                  <tr
-                    key={h.id}
-                    onClick={() =>
-                      onInspectChart(h.symbol, {
-                        avgBuyPrice: h.avgBuyPrice,
-                        targetPrice: aiRating?.suggestedTarget,
-                        stopLoss: aiRating?.suggestedStopLoss,
-                      })
-                    }
-                    className="hover:bg-slate-50 cursor-pointer"
-                  >
-                    <td className="py-2.5 px-4 font-semibold text-slate-900">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span>{h.symbol.replace(/\.(NS|BO)$/, '')}</span>
-                        <EarningsRiskTag
-                          nextEarningsDate={aiRating?.fundamentals?.nextEarningsDate}
-                          daysToEarnings={aiRating?.fundamentals?.daysToEarnings}
-                          earningsRiskFlag={aiRating?.fundamentals?.earningsRiskFlag}
-                          compact
-                        />
-                      </div>
-                      <div className="text-[11px] font-normal text-slate-500">
-                        {h.weightPercent.toFixed(1)}% weight
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono-tabular">
-                      {formatINR(h.livePrice)}
-                    </td>
-                    <td
-                      className={`py-2.5 px-3 text-right font-mono-tabular ${
-                        (sma50Diff ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'
-                      }`}
-                    >
-                      {formatPercent(sma50Diff)}
-                    </td>
-                    <td
-                      className={`py-2.5 px-3 text-right font-mono-tabular ${
-                        (sma200Diff ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'
-                      }`}
-                    >
-                      {formatPercent(sma200Diff)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono-tabular text-slate-800">
-                      {h.quote?.rsi14 !== null && h.quote?.rsi14 !== undefined
-                        ? h.quote.rsi14.toFixed(1)
-                        : '—'}
-                    </td>
-                    <td
-                      className={`py-2.5 px-3 text-right font-mono-tabular font-semibold ${
-                        (h.quote?.return6M ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'
-                      }`}
-                    >
-                      {formatPercent(h.quote?.return6M)}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono-tabular font-bold">
-                      {confScore !== null ? (
-                        <span className={getConfidenceScoreTone(confScore)}>
-                          {confScore.toFixed(1)}%
-                        </span>
-                      ) : (
-                        <span className="font-normal text-slate-400">—</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 font-bold">
-                      {aiRating ? (
-                        <span
-                          className={
-                            aiRating.rating === 'BUY'
-                              ? 'text-green-700'
-                              : aiRating.rating === 'EXIT'
-                              ? 'text-red-700'
-                              : 'text-amber-700'
-                          }
-                        >
-                          {aiRating.rating}
-                        </span>
-                      ) : (
-                        <span className="font-normal text-slate-400">Pending</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span
-                        className={`font-semibold ${
-                          h.healthStatus === 'Healthy'
-                            ? 'text-green-700'
-                            : h.healthStatus === 'Watch'
-                            ? 'text-amber-700'
-                            : 'text-red-700'
-                        }`}
-                      >
-                        {h.healthStatus}
-                      </span>
-                      <span className="text-slate-500 ml-2">{h.healthReason}</span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

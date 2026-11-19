@@ -463,39 +463,39 @@ export function MutualFundsView({
 
       {/* Workspace Navigation + Primary Actions */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white border border-slate-200 rounded-xl px-5 py-3.5">
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
+        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit overflow-x-auto max-w-full">
           <button
             type="button"
             onClick={() => setSubTab('ledger')}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
               subTab === 'ledger'
-                ? 'bg-white text-slate-900 shadow-xs'
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Holdings &amp; Leak Audit
+            Holdings ({holdings.length})
           </button>
           <button
             type="button"
             onClick={() => setSubTab('report_card')}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
               subTab === 'report_card'
-                ? 'bg-white text-slate-900 shadow-xs'
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Fund Report Card
+            Fund Deep-Dive &amp; FIFO
           </button>
           <button
             type="button"
             onClick={() => setSubTab('switches')}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
               subTab === 'switches'
-                ? 'bg-white text-slate-900 shadow-xs'
+                ? 'bg-white text-slate-900 shadow-xs font-semibold'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            Switch &amp; Tax Simulator ({actionableSwitches.length})
+            AI Switch Plan ({actionableSwitches.length})
           </button>
         </div>
 
@@ -1198,6 +1198,59 @@ export function MutualFundsView({
                     </div>
                   </div>
                 </div>
+
+                {/* Selected Fund FIFO Lot & Exit-Load Schedule */}
+                {activeFund.switchSuggestion.fifoBreakdown && (
+                  <div className="pt-4 border-t border-slate-100 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-xs font-semibold text-slate-900">
+                        FIFO Tax &amp; Exit-Load Lot Breakdown
+                      </div>
+                      <div className="text-[11px] font-mono-tabular text-slate-500">
+                        Held {activeFund.switchSuggestion.holdingDays}d · Exit Load{' '}
+                        {activeFund.switchSuggestion.exitLoadRatePct}% (
+                        {formatINR(activeFund.switchSuggestion.estimatedExitLoad)}) · Est. Tax (
+                        {activeFund.switchSuggestion.taxType}){' '}
+                        {formatINR(activeFund.switchSuggestion.estimatedTax)}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono-tabular">
+                      <div>
+                        <span className="text-[11px] text-slate-500 block font-sans">FIFO Lots</span>
+                        <span className="font-semibold text-slate-900">
+                          {activeFund.switchSuggestion.fifoBreakdown.lotCount}{' '}
+                          {activeFund.switchSuggestion.fifoBreakdown.lotCount === 1
+                            ? 'lumpsum lot'
+                            : 'SIP lots'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-500 block font-sans">
+                          0% Exit-Load Eligible
+                        </span>
+                        <span className="font-semibold text-green-700">
+                          {formatINR(activeFund.switchSuggestion.fifoBreakdown.exitLoadFreeValue)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-500 block font-sans">
+                          LTCG (&gt;1Y) Value
+                        </span>
+                        <span className="font-semibold text-slate-900">
+                          {formatINR(activeFund.switchSuggestion.fifoBreakdown.ltcgEligibleValue)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[11px] text-slate-500 block font-sans">
+                          STCG / Locked Value
+                        </span>
+                        <span className="font-semibold text-amber-700">
+                          {formatINR(activeFund.switchSuggestion.fifoBreakdown.stcgValue)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

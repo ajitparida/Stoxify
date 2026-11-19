@@ -34,7 +34,7 @@ const STOCK_AI_BATCH_SIZE = 15;
 const AI_BATCH_CONCURRENCY = 2;
 
 const RATING_CRITERIA =
-  'Criteria: BUY=constructive trend above 50/200-DMA (with wtPct<25 when portfolio weight is given) or quality oversold RSI<40 with healthy ROCE; HOLD=fair consolidation, stretched overbought RSI>=75, or oversized portfolio weight; EXIT=persistent 6M lag vs Nifty below 200-DMA or weak ROCE drag.';
+  'Criteria: Strictly align rating & conviction with Net Confidence (confPct): BUY requires confPct>=52 (confPct>=65 if daysToEarnings<=5) with constructive trend above 50/200-DMA (wtPct<25 when given) or quality oversold RSI<40 with healthy ROCE; HOLD=moderate confidence, consolidation, stretched RSI>=75, imminent earnings caution, or oversized weight; EXIT=weak confidence (<50) with persistent 6M lag vs Nifty below 200-DMA or weak ROCE drag.';
 
 const QUOTA_EXHAUSTED_NOTICE =
   'Gemini API free-tier daily quota (20 req/day) was reached. Displaying quantitative ratings grounded in live NSE/BSE prices, 50/200-DMA, RSI-14, ROCE, and Nifty 50 relative strength. Select a billing-enabled key in Settings > Secrets for full LLM commentary.';
@@ -261,6 +261,10 @@ function evaluateBatchQuantFallback(params: {
     const ret6m = t.return6M;
     const relNifty6M = ret6m !== null ? Number((ret6m - nifty6M).toFixed(1)) : null;
 
+    const netConf = t.confidence?.overallScore ?? 55;
+    const dte = t.fundamentals?.daysToEarnings ?? null;
+    const imminentEarnings = typeof dte === 'number' && dte >= 0 && dte <= 5;
+
     let verdict: 'BUY' | 'HOLD' | 'EXIT' = 'HOLD';
     let conviction: 'High' | 'Medium' | 'Low' = 'Medium';
     let headline = 'Consolidating near trend baseline — trail stop-loss';
@@ -269,26 +273,36 @@ function evaluateBatchQuantFallback(params: {
     const severeLag = relNifty6M !== null && relNifty6M <= -12 && above200 === false;
     const weakFundamentals = t.roce !== null && t.roce < 7 && t.unrealizedPnlPercent < -15;
 
-    if (severeLag || (deepBelow200 && (ret6m ?? 0) < -10) || weakFundamentals) {
+    if (
+      (severeLag || (deepBelow200 && (ret6m ?? 0) < -10) || weakFundamentals || netConf < 36) &&
+      !(netConf >= 70 && above200 === true)
+    ) {
       verdict = 'EXIT';
-      conviction = deepBelow200 && (relNifty6M ?? 0) <= -15 ? 'High' : 'Medium';
+      conviction = netConf <= 38 ? 'High' : 'Medium';
       headline =
         above200 === false
           ? `Below 200-DMA (${ret6m !== null ? `${ret6m}% 6M` : 'weak momentum'}) — capital-drag exit`
-          : 'Sustained benchmark underperformance & weak return profile';
+          : 'Sustained benchmark underperformance & weak confidence profile';
     } else if (
-      (above50 === true && above200 === true && rsi <= 68 && t.portfolioWeightPercent < 22) ||
-      (rsi <= 38 && (t.roce ?? 12) >= 12 && !deepBelow200)
+      netConf >= 52 &&
+      (!imminentEarnings || netConf >= 65) &&
+      ((above50 === true && above200 === true && rsi <= 68 && t.portfolioWeightPercent < 22) ||
+        (rsi <= 38 && (t.roce ?? 12) >= 12 && !deepBelow200) ||
+        (netConf >= 68 && t.portfolioWeightPercent < 22 && rsi <= 70))
     ) {
       verdict = 'BUY';
-      conviction = above50 && above200 && (relNifty6M ?? 0) > 0 ? 'High' : 'Medium';
+      conviction = netConf >= 68 ? 'High' : 'Medium';
       headline =
         rsi <= 38
           ? `Oversold quality support (RSI ${rsi.toFixed(1)}) — accumulation zone`
           : `Uptrend above 50/200-DMA with ${relNifty6M !== null && relNifty6M >= 0 ? 'Nifty outperformance' : 'steady momentum'}`;
+    } else if (imminentEarnings && netConf < 65) {
+      verdict = 'HOLD';
+      conviction = 'Medium';
+      headline = `Results due in ${dte}d — hold steady ahead of earnings event`;
     } else if (t.portfolioWeightPercent >= 22) {
       verdict = 'HOLD';
-      conviction = 'High';
+      conviction = netConf >= 66 ? 'High' : 'Medium';
       headline = `Oversized weight (${t.portfolioWeightPercent.toFixed(1)}%) — hold & cap incremental adds`;
     } else if (rsi >= 72 && t.unrealizedPnlPercent > 15) {
       verdict = 'HOLD';
@@ -400,6 +414,10 @@ async function evaluateTelemetryBatch(params: {
     ...(t.roce !== null ? { roce: t.roce } : {}),
     ...(t.peRatio !== null ? { pe: t.peRatio } : {}),
     ...(t.confidence ? { confPct: t.confidence.overallScore } : {}),
+    ...(t.confidence?.totalAdjustment ? { confAdj: t.confidence.totalAdjustment } : {}),
+    ...(typeof t.fundamentals?.daysToEarnings === 'number' && t.fundamentals.daysToEarnings >= 0 && t.fundamentals.daysToEarnings <= 14
+      ? { daysToEarnings: t.fundamentals.daysToEarnings }
+      : {}),
     ...(t.fundamentals?.earningsRiskFlag && t.fundamentals.nextEarningsDate
       ? { earnings: t.fundamentals.nextEarningsDate }
       : {}),
@@ -581,7 +599,58 @@ function applyGuardrails(
       let status: 'PASSED' | 'ADJUSTED' | 'FLAGGED' = 'PASSED';
       const notes: string[] = [];
 
-      if (cleanRating.rating === 'BUY' || cleanRating.rating === 'HOLD') {
+      // 1. Unify Verdict & Conviction against calibrated Net Confidence Score
+      let unifiedRating = cleanRating.rating;
+      let unifiedConviction = cleanRating.conviction;
+      const netConf = t.confidence?.overallScore ?? null;
+      const totalAdj = t.confidence?.totalAdjustment ?? 0;
+      const dte = t.fundamentals?.daysToEarnings ?? null;
+
+      if (unifiedRating === 'BUY' && netConf !== null && netConf < 52) {
+        if (netConf < 36 && t.sma200 && live < t.sma200 * 0.92) {
+          unifiedRating = 'EXIT';
+          status = 'ADJUSTED';
+          notes.push(
+            `Unified BUY → EXIT: net confidence ${netConf.toFixed(1)}% (<36%) while trading below 200-DMA.`
+          );
+        } else {
+          unifiedRating = 'HOLD';
+          status = 'ADJUSTED';
+          notes.push(
+            `Unified BUY → HOLD: net confidence ${netConf.toFixed(1)}% is below the 52% BUY threshold${
+              totalAdj < 0 ? ` (after ${totalAdj} pts risk deduction)` : ''
+            }.`
+          );
+        }
+      } else if (
+        unifiedRating === 'BUY' &&
+        typeof dte === 'number' &&
+        dte >= 0 &&
+        dte <= 5 &&
+        netConf !== null &&
+        netConf < 65
+      ) {
+        unifiedRating = 'HOLD';
+        status = 'ADJUSTED';
+        notes.push(
+          `Unified BUY → HOLD: earnings due in ${dte}d with ${netConf.toFixed(1)}% net confidence (<65% event buffer).`
+        );
+      } else if (
+        unifiedRating === 'EXIT' &&
+        netConf !== null &&
+        netConf >= 70 &&
+        t.sma200 &&
+        live > t.sma200
+      ) {
+        unifiedRating = 'HOLD';
+        status = 'ADJUSTED';
+        notes.push(
+          `Unified EXIT → HOLD: strong ${netConf.toFixed(1)}% confidence above 200-DMA (consider partial trim instead of full exit).`
+        );
+      }
+
+      // 2. Calibrate Target & Stop-Loss against the unified verdict
+      if (unifiedRating === 'BUY' || unifiedRating === 'HOLD') {
         if (!Number.isFinite(target) || target <= live * 1.01) {
           const fallbackTarget =
             t.sma200 && t.sma200 > live * 1.04
@@ -623,7 +692,7 @@ function applyGuardrails(
       }
 
       if (
-        cleanRating.rating === 'BUY' &&
+        unifiedRating === 'BUY' &&
         t.sma200 &&
         live < t.sma200 * 0.88 &&
         (t.return6M ?? 0) < -12 &&
@@ -634,7 +703,7 @@ function applyGuardrails(
           `Trend conflict: trading >12% below 200-DMA (6M ${t.return6M}%) — falling-knife risk on BUY.`
         );
       } else if (
-        cleanRating.rating === 'EXIT' &&
+        unifiedRating === 'EXIT' &&
         t.sma50 &&
         t.sma200 &&
         live > t.sma50 &&
@@ -647,8 +716,34 @@ function applyGuardrails(
         );
       }
 
+      // 3. Strictly align Conviction label with Net Confidence & Guardrail Status
+      if (netConf !== null) {
+        if (unifiedRating === 'BUY') {
+          unifiedConviction =
+            netConf >= 68 && status !== 'FLAGGED' && totalAdj > -7
+              ? 'High'
+              : netConf >= 52
+              ? 'Medium'
+              : 'Low';
+        } else if (unifiedRating === 'EXIT') {
+          unifiedConviction =
+            netConf <= 38 && status !== 'FLAGGED'
+              ? 'High'
+              : netConf <= 55
+              ? 'Medium'
+              : 'Low';
+        } else {
+          unifiedConviction =
+            totalAdj <= -7 || netConf < 48
+              ? 'Low'
+              : netConf >= 66 && status === 'PASSED'
+              ? 'High'
+              : 'Medium';
+        }
+      }
+
       const finalTarget = Number(target.toFixed(2));
-      const projection = buildStockProjection(t, cleanRating.rating, finalTarget, {
+      const projection = buildStockProjection(t, unifiedRating, finalTarget, {
         p1m,
         p3m,
         p6m,
@@ -659,6 +754,8 @@ function applyGuardrails(
 
       return {
         ...cleanRating,
+        rating: unifiedRating,
+        conviction: unifiedConviction,
         suggestedTarget: finalTarget,
         suggestedStopLoss: Number(stop.toFixed(2)),
         projection,
@@ -666,7 +763,7 @@ function applyGuardrails(
         guardrailNote:
           notes.length > 0
             ? notes.join(' ')
-            : `Passed live β (${beta.toFixed(2)}x) & 50/200-DMA support checks.`,
+            : `Verified: verdict aligned with ${netConf !== null ? `${netConf.toFixed(1)}% net confidence` : 'live telemetry'}, β (${beta.toFixed(2)}x) & DMA support.`,
         confidence: t.confidence,
         fundamentals: t.fundamentals ?? null,
       };
@@ -733,6 +830,11 @@ export async function analyzePortfolioHoldings(
       niftyReturn3M: nifty?.return3M ?? null,
       niftyReturn6M: nifty?.return6M ?? null,
       sector: q?.sector || h.sector,
+      applyRiskDeductions: true,
+      nextEarningsDate: fund?.nextEarningsDate ?? q?.nextEarningsDate ?? null,
+      daysToEarnings: fund?.daysToEarnings ?? q?.daysToEarnings ?? null,
+      earningsRiskFlag: fund?.earningsRiskFlag ?? q?.earningsRiskFlag ?? false,
+      fundamentalsSource: sym.startsWith('^') ? null : fund?.source ?? q?.fundamentalsSource ?? 'catalog_fallback',
       fundamentals: {
         trailingPE: fund?.trailingPE ?? q?.peRatio ?? null,
         forwardPE: fund?.forwardPE ?? null,
@@ -953,6 +1055,11 @@ export async function analyzeSingleSymbolOutlook(
     niftyReturn3M: nifty?.return3M ?? null,
     niftyReturn6M: nifty?.return6M ?? null,
     sector: quote.sector || 'Equities',
+    applyRiskDeductions: true,
+    nextEarningsDate: liveFundamentals?.nextEarningsDate ?? quote.nextEarningsDate ?? null,
+    daysToEarnings: liveFundamentals?.daysToEarnings ?? quote.daysToEarnings ?? null,
+    earningsRiskFlag: liveFundamentals?.earningsRiskFlag ?? quote.earningsRiskFlag ?? false,
+    fundamentalsSource: symbol.startsWith('^') ? null : liveFundamentals?.source ?? quote.fundamentalsSource ?? 'catalog_fallback',
     fundamentals: liveFundamentals
       ? {
           trailingPE: liveFundamentals.trailingPE,
@@ -1045,7 +1152,10 @@ export async function analyzeSingleSymbolOutlook(
       fwdPe: liveFundamentals?.forwardPE ?? null,
       de: telemetryItem.debtToEquity,
       nextEarningsDate: liveFundamentals?.nextEarningsDate ?? null,
+      daysToEarnings: liveFundamentals?.daysToEarnings ?? null,
       confidenceScore: confidence.overallScore,
+      baseConfidenceScore: confidence.baseScore ?? confidence.overallScore,
+      confidenceAdjustment: confidence.totalAdjustment ?? 0,
       beta: telemetryItem.beta,
       volRatio: telemetryItem.volumeRatio,
     };

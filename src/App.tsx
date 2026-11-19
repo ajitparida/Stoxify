@@ -5,7 +5,7 @@ import {
   Bot,
   Briefcase,
   CandlestickChart,
-  Filter,
+  Compass,
   Layers,
   LayoutDashboard,
   LogIn,
@@ -13,8 +13,6 @@ import {
   Menu,
   RefreshCw,
   ShieldAlert,
-  Sparkles,
-  TrendingUp,
   Upload,
   X,
 } from 'lucide-react';
@@ -50,16 +48,14 @@ import { AddHoldingModal } from './components/AddHoldingModal';
 import { AddMutualFundModal } from './components/AddMutualFundModal';
 import { AlgoTradingView } from './components/AlgoTradingView';
 import { ConfirmActionModal } from './components/ConfirmActionModal';
-import { HealthDiagnosticsView } from './components/HealthDiagnosticsView';
+import { HealthDiagnosticsView, type DiagnosticsSubTab } from './components/HealthDiagnosticsView';
 import { MarketChartTerminal, type ChartOverlayLevels } from './components/MarketChartTerminal';
+import { MarketDiscoveryHub, type DiscoverySubTab } from './components/MarketDiscoveryHub';
 import { MfImportModal } from './components/MfImportModal';
 import { MutualFundsView } from './components/MutualFundsView';
 import { OverviewDashboardView } from './components/OverviewDashboardView';
 import { PortfolioView } from './components/PortfolioView';
-import { ProScreenerView } from './components/ProScreenerView';
-import { ResearchSignalsView } from './components/ResearchSignalsView';
 import { ScreenshotImportModal } from './components/ScreenshotImportModal';
-import { AiStrategiesView } from './components/AiStrategiesView';
 import type {
   AlgoOrderDraft,
   AlgoOrderRecord,
@@ -98,10 +94,8 @@ type WorkspaceTab =
   | 'portfolio'
   | 'mutualFunds'
   | 'diagnostics'
+  | 'discovery'
   | 'charts'
-  | 'screener'
-  | 'signals'
-  | 'strategies'
   | 'algo';
 
 const NAV_GROUPS: Array<{
@@ -116,18 +110,15 @@ const NAV_GROUPS: Array<{
     groupLabel: 'Portfolios',
     items: [
       { key: 'portfolio', label: 'Equity Holdings', icon: Briefcase },
-      { key: 'mutualFunds', label: 'Mutual Funds Pro', icon: Layers },
-      { key: 'diagnostics', label: 'Health Diagnostics', icon: Activity },
+      { key: 'mutualFunds', label: 'Mutual Funds', icon: Layers },
+      { key: 'diagnostics', label: 'Health & AI Audit', icon: Activity },
     ],
   },
   {
     groupLabel: 'Market Intelligence',
     items: [
-      { key: 'charts', label: 'Live Market Charts', icon: CandlestickChart },
-      { key: 'screener', label: 'Pro Stock Screener', icon: Filter },
-      { key: 'signals', label: 'Research Signals', icon: Sparkles },
-      { key: 'strategies', label: 'AI Strategies', icon: TrendingUp },
-      { key: 'algo', label: 'Algo Trading Lab', icon: Bot },
+      { key: 'discovery', label: 'Market Discovery', icon: Compass },
+      { key: 'charts', label: 'Live Charts', icon: CandlestickChart },
     ],
   },
 ];
@@ -156,6 +147,8 @@ function formatApiError(rawMsg: string, fallback: string): string {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('overview');
+  const [discoverySubTab, setDiscoverySubTab] = useState<DiscoverySubTab>('screener');
+  const [diagnosticsSubTab, setDiagnosticsSubTab] = useState<DiagnosticsSubTab>('audit');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Auth & Firestore Cloud State
@@ -1438,7 +1431,10 @@ export default function App() {
     }
   };
 
-  const activeNavTitle = ALL_NAV_ITEMS.find((n) => n.key === activeTab)?.label || 'Workspace';
+  const activeNavTitle =
+    activeTab === 'algo'
+      ? 'Algo Lab (Beta)'
+      : ALL_NAV_ITEMS.find((n) => n.key === activeTab)?.label || 'Workspace';
 
   return (
     <div className="min-h-screen flex bg-slate-50 text-slate-900">
@@ -1547,7 +1543,29 @@ export default function App() {
           </div>
         </div>
 
-        {/* User Account Footer */}
+        {/* Quiet Algo Lab (Beta) Footer Link + User Account Footer */}
+        <div className="px-3 pt-2 pb-1.5 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => setActiveTab('algo')}
+            className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px] font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              activeTab === 'algo'
+                ? 'bg-blue-50 text-blue-800 font-semibold'
+                : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <Bot className="w-3.5 h-3.5 shrink-0" />
+              <span>Algo Lab (Beta)</span>
+            </span>
+            {activeAlgoStrategies.length > 0 && (
+              <span className="font-mono-tabular text-[10px] text-slate-400">
+                {activeAlgoStrategies.length}
+              </span>
+            )}
+          </button>
+        </div>
+
         <div className="p-3 border-t border-slate-200 bg-slate-50/70">
           {user ? (
             <div className="flex items-center justify-between gap-2 px-1">
@@ -1631,6 +1649,25 @@ export default function App() {
                 </div>
               ))}
             </nav>
+            <div className="p-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('algo');
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-medium rounded-lg ${
+                  activeTab === 'algo'
+                    ? 'bg-blue-50 text-blue-800 font-semibold'
+                    : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Bot className="w-3.5 h-3.5" />
+                  <span>Algo Lab (Beta)</span>
+                </span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1747,7 +1784,15 @@ export default function App() {
               loadingMfAnalysis={loadingMfAnalysis}
               isGuestMode={!user}
               busyDemo={portfolioActionBusy}
-              onNavigate={(tab) => setActiveTab(tab)}
+              onNavigate={(tab, subTab) => {
+                if (tab === 'discovery' && (subTab === 'screener' || subTab === 'signals' || subTab === 'strategies')) {
+                  setDiscoverySubTab(subTab);
+                }
+                if (tab === 'diagnostics' && (subTab === 'audit' || subTab === 'rotation' || subTab === 'allocation')) {
+                  setDiagnosticsSubTab(subTab);
+                }
+                setActiveTab(tab);
+              }}
               onAddStock={() => {
                 setEditingHolding(null);
                 setPrefillHolding(null);
@@ -1789,8 +1834,12 @@ export default function App() {
               onInspectChart={(sym, avgBuy) =>
                 openChartForSymbol(sym, avgBuy ? { avgBuyPrice: avgBuy } : null)
               }
-              onOpenDiagnostics={() => setActiveTab('diagnostics')}
+              onOpenDiagnostics={() => {
+                setDiagnosticsSubTab('allocation');
+                setActiveTab('diagnostics');
+              }}
               onRunAiAudit={() => {
+                setDiagnosticsSubTab('audit');
                 setActiveTab('diagnostics');
                 void handleRunAiAnalysis();
               }}
@@ -1847,6 +1896,8 @@ export default function App() {
                             projection: updated.projection,
                             guardrailStatus: updated.guardrailStatus,
                             guardrailNote: updated.guardrailNote,
+                            confidence: updated.confidence ?? r.confidence,
+                            fundamentals: updated.fundamentals ?? r.fundamentals,
                           }
                         : r
                     ),
@@ -1886,6 +1937,8 @@ export default function App() {
               aiLoading={aiLoading}
               aiProgress={aiBatchProgress}
               aiError={aiError}
+              activeSubTab={diagnosticsSubTab}
+              onChangeSubTab={setDiagnosticsSubTab}
               onRunAiAnalysis={() => void handleRunAiAnalysis()}
               rotationData={rotationData}
               rotationLoading={rotationLoading}
@@ -1923,35 +1976,21 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'screener' && (
-            <ProScreenerView
-              onInspectChart={(sym) => openChartForSymbol(sym)}
+          {activeTab === 'discovery' && (
+            <MarketDiscoveryHub
+              activeSubTab={discoverySubTab}
+              onChangeSubTab={setDiscoverySubTab}
+              onInspectChart={(sym, levels) => openChartForSymbol(sym, levels ?? null)}
               onToggleWatchlist={(sym, name, exch, sec) =>
                 void handleToggleWatchlist(sym, name, exch, sec)
               }
               isInWatchlist={isInWatchlist}
-            />
-          )}
-
-          {activeTab === 'signals' && (
-            <ResearchSignalsView
-              onInspectSignalChart={(sym, levels) => openChartForSymbol(sym, levels)}
               onLogSignalPosition={(prefill) => {
                 setEditingHolding(null);
                 setPrefillHolding(prefill);
                 setAddModalOpen(true);
               }}
-            />
-          )}
-
-          {activeTab === 'strategies' && (
-            <AiStrategiesView
-              onInspectChart={(sym) => openChartForSymbol(sym)}
-              onToggleWatchlist={(sym, name, exch, sec) =>
-                void handleToggleWatchlist(sym, name, exch, sec)
-              }
-              isInWatchlist={isInWatchlist}
-              onStageBuy={(constituent, strategyName) => {
+              onStageStrategyBuy={(constituent, strategyName) => {
                 const defaultQty =
                   constituent.price > 0 ? Math.max(1, Math.round(25000 / constituent.price)) : 10;
                 setEditingHolding(null);

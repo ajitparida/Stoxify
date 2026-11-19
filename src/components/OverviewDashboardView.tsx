@@ -22,7 +22,8 @@ interface OverviewDashboardViewProps {
   isGuestMode: boolean;
   busyDemo?: boolean;
   onNavigate: (
-    tab: 'portfolio' | 'mutualFunds' | 'diagnostics' | 'charts' | 'screener' | 'signals'
+    tab: 'portfolio' | 'mutualFunds' | 'diagnostics' | 'discovery' | 'charts',
+    subTab?: string
   ) => void;
   onAddStock: () => void;
   onUploadStockScreenshot: () => void;
@@ -211,22 +212,22 @@ export function OverviewDashboardView({
           </button>
           <button
             type="button"
-            onClick={() => onNavigate('screener')}
+            onClick={() => onNavigate('discovery', 'screener')}
             className="text-left bg-white border border-slate-200 rounded-xl p-5 hover:border-slate-300 transition-colors"
           >
-            <div className="text-xs font-semibold text-slate-900">Pro Stock Screener</div>
+            <div className="text-xs font-semibold text-slate-900">Screener &amp; Patterns</div>
             <div className="text-xs text-slate-500 mt-1">
-              Screen and sort NSE/BSE stocks by Golden Crossover, Volume Shockers, ROCE, P/E, and RSI.
+              Screen NSE/BSE stocks by calibrated Confidence, Golden Crossover, ROCE, P/E, and walk-forward patterns.
             </div>
           </button>
           <button
             type="button"
-            onClick={() => onNavigate('signals')}
+            onClick={() => onNavigate('discovery', 'signals')}
             className="text-left bg-white border border-slate-200 rounded-xl p-5 hover:border-slate-300 transition-colors"
           >
-            <div className="text-xs font-semibold text-slate-900">Research Signals</div>
+            <div className="text-xs font-semibold text-slate-900">Signals &amp; AI Baskets</div>
             <div className="text-xs text-slate-500 mt-1">
-              Review high-conviction technical setups with live risk/reward target and stop levels.
+              Review unified research setups and 4 Nifty-benchmarked NSE factor baskets in Market Discovery.
             </div>
           </button>
         </section>

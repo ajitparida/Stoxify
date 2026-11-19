@@ -10,6 +10,7 @@ import {
   mergeQuoteWithFundamentals,
 } from './fundamentalsService.ts';
 import type {
+  ConfidenceAdjustment,
   ConfidenceBreakdown,
   LiveFundamentalsSnapshot,
   LiveResearchSignal,
@@ -102,6 +103,11 @@ export interface ConfidenceInput {
   niftyReturn3M?: number | null;
   niftyReturn6M?: number | null;
   sector?: string;
+  applyRiskDeductions?: boolean;
+  nextEarningsDate?: string | null;
+  daysToEarnings?: number | null;
+  earningsRiskFlag?: boolean;
+  fundamentalsSource?: 'live_yahoo' | 'catalog_fallback' | null;
   fundamentals?: {
     trailingPE?: number | null;
     forwardPE?: number | null;
@@ -332,7 +338,59 @@ export function computeConfidenceBreakdown(input: ConfidenceInput): ConfidenceBr
   const momPts = round2(momentumScore * WEIGHTS.momentumQuality);
   const fundPts = round2(fundScore * WEIGHTS.fundamentalHealth);
 
-  const overallScore = round2(clamp(trendPts + rsPts + momPts + fundPts, 5, 97));
+  const baseScore = round2(clamp(trendPts + rsPts + momPts + fundPts, 5, 97));
+  const adjustments: ConfidenceAdjustment[] = [];
+
+  if (input.applyRiskDeductions !== false) {
+    const dte = input.daysToEarnings;
+    if (typeof dte === 'number' && Number.isFinite(dte) && dte >= 0 && dte <= 14) {
+      const dateSuffix = input.nextEarningsDate ? ` (${input.nextEarningsDate})` : '';
+      if (dte <= 5) {
+        adjustments.push({
+          code: 'EARNINGS_IMMINENT',
+          label: `Earnings in ${dte}d`,
+          delta: -6,
+          reason: `Quarterly results due in ${dte} ${dte === 1 ? 'day' : 'days'}${dateSuffix} — elevated binary gap risk.`,
+        });
+      } else {
+        adjustments.push({
+          code: 'EARNINGS_UPCOMING',
+          label: `Earnings in ${dte}d`,
+          delta: -4,
+          reason: `Quarterly results due in ${dte} days${dateSuffix} — near-term event volatility.`,
+        });
+      }
+    }
+
+    if (input.fundamentalsSource === 'catalog_fallback') {
+      adjustments.push({
+        code: 'FUNDAMENTALS_FALLBACK',
+        label: 'Baseline fundamentals',
+        delta: -5,
+        reason: 'Live Yahoo Finance ratios unavailable; scored using catalog baseline.',
+      });
+    } else if (input.fundamentalsSource === 'live_yahoo') {
+      const missingFields: string[] = [];
+      if (f?.roePct === null || f?.roePct === undefined) missingFields.push('ROE');
+      if (f?.revenueGrowthPct === null || f?.revenueGrowthPct === undefined) {
+        missingFields.push('Rev Growth');
+      }
+      if (f?.earningsGrowthPct === null || f?.earningsGrowthPct === undefined) {
+        missingFields.push('EPS Growth');
+      }
+      if (missingFields.length >= 2) {
+        adjustments.push({
+          code: 'FUNDAMENTALS_PARTIAL',
+          label: 'Incomplete live ratios',
+          delta: -3,
+          reason: `Live Yahoo feed missing ${missingFields.join(' & ')}.`,
+        });
+      }
+    }
+  }
+
+  const totalAdjustment = round2(adjustments.reduce((sum, item) => sum + item.delta, 0));
+  const overallScore = round2(clamp(baseScore + totalAdjustment, 5, 97));
   const tier: ConfidenceBreakdown['tier'] =
     overallScore >= 66 ? 'Strong' : overallScore >= 50 ? 'Moderate' : 'Caution';
 
@@ -351,6 +409,9 @@ export function computeConfidenceBreakdown(input: ConfidenceInput): ConfidenceBr
   });
 
   return {
+    baseScore,
+    adjustments,
+    totalAdjustment,
     overallScore,
     tier,
     pillars: {
@@ -561,6 +622,11 @@ export async function getEnrichedScreenerUniverse(): Promise<MarketQuote[]> {
       niftyReturn3M: niftyQuote?.return3M ?? null,
       niftyReturn6M: niftyQuote?.return6M ?? null,
       sector: merged.sector,
+      applyRiskDeductions: true,
+      nextEarningsDate: merged.nextEarningsDate ?? null,
+      daysToEarnings: merged.daysToEarnings ?? null,
+      earningsRiskFlag: merged.earningsRiskFlag ?? false,
+      fundamentalsSource: merged.fundamentalsSource ?? fund?.source ?? null,
       fundamentals: {
         trailingPE: merged.peRatio,
         forwardPE: merged.forwardPE,
@@ -687,6 +753,7 @@ async function buildPatternDiscoveryHub(): Promise<PatternDiscoveryResponse> {
         niftyReturn3M: n3m,
         niftyReturn6M: n6m,
         sector: stockMeta.sector,
+        applyRiskDeductions: false,
         fundamentals: {
           trailingPE: stockMeta.peRatio,
           forwardPE: stockMeta.forwardPE,
@@ -923,6 +990,11 @@ export async function getEnrichedResearchSignals(): Promise<LiveResearchSignal[]
       niftyReturn3M: niftyQuote?.return3M ?? null,
       niftyReturn6M: niftyQuote?.return6M ?? null,
       sector: mergedQuote.sector,
+      applyRiskDeductions: true,
+      nextEarningsDate: mergedQuote.nextEarningsDate ?? null,
+      daysToEarnings: mergedQuote.daysToEarnings ?? null,
+      earningsRiskFlag: mergedQuote.earningsRiskFlag ?? false,
+      fundamentalsSource: mergedQuote.fundamentalsSource ?? fund?.source ?? null,
       fundamentals: {
         trailingPE: mergedQuote.peRatio,
         forwardPE: mergedQuote.forwardPE,
@@ -942,8 +1014,18 @@ export async function getEnrichedResearchSignals(): Promise<LiveResearchSignal[]
       walkForwardByPattern.get('high_confidence') ??
       null;
 
+    // Unify signal action with calibrated net Confidence Score & imminent earnings protection
+    const dte = mergedQuote.daysToEarnings;
+    const isImminentEarningsLowConf =
+      typeof dte === 'number' && dte >= 0 && dte <= 5 && confidence.overallScore < 65;
+    const unifiedAction: 'BUY' | 'HOLD' =
+      sig.action === 'BUY' && (confidence.overallScore < 52 || isImminentEarningsLowConf)
+        ? 'HOLD'
+        : sig.action;
+
     return {
       ...sig,
+      action: unifiedAction,
       liveQuote: { ...mergedQuote, confidence },
       confidence,
       primaryPattern,
