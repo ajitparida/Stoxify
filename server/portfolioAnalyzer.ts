@@ -1,5 +1,5 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
-import { getQuotes } from './marketService.ts';
+import { getQuotes, resolveActiveMarketSymbol } from './marketService.ts';
 import {
   getLiveFundamentals,
   getLiveFundamentalsBatch,
@@ -1014,7 +1014,7 @@ export async function analyzeSingleSymbolOutlook(
   symbolInput: string,
   options?: { forceRefresh?: boolean }
 ): Promise<SymbolAiOutlook> {
-  const symbol = symbolInput.trim().toUpperCase();
+  const symbol = resolveActiveMarketSymbol(symbolInput);
   if (!symbol) {
     throw new Error('A valid stock or index symbol is required.');
   }

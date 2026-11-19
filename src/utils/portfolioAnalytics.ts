@@ -92,7 +92,7 @@ export const DEFAULT_WATCHLIST_SYMBOLS = [
   'TCS.NS',
   'INFY.NS',
   'ICICIBANK.NS',
-  'TATAMOTORS.NS',
+  'TMPV.NS',
   'BEL.NS',
   'TRENT.NS',
 ];

@@ -44,7 +44,7 @@ async function parseScreenshotBatch(
     {
       text: `Extract every Indian stock/equity holding visible in these broker portfolio screenshots (e.g., Zerodha Kite, Groww, Upstox, Angel One, ICICI Direct, HDFC Securities, INDmoney).
 Rules:
-1. Extract the exact visible stock name or symbol as rawName, and provide the standard NSE/BSE ticker without suffix in guessedSymbol (e.g., RELIANCE, HDFCBANK, TATAMOTORS, TCS, INFOSYS -> INFY).
+1. Extract the exact visible stock name or symbol as rawName, and provide the standard NSE/BSE ticker without suffix in guessedSymbol (e.g., RELIANCE, HDFCBANK, TMPV, TMCV, TCS, INFOSYS -> INFY).
 2. Read quantity (Qty / Shares), average buy price (Avg. / Buy Avg / Avg Cost), and screenshot Last Traded Price (LTP) accurately. Do not confuse Invested Value or Current Value or P&L with Avg Buy Price or LTP.
 3. If multiple screenshots overlap or duplicate the exact same stock, include each distinct row clearly.
 4. Use exchange "NSE" unless BSE is explicitly displayed.

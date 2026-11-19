@@ -93,7 +93,7 @@ const QUICK_PROMPTS: Array<{ title: string; prompt: string }> = [
   {
     title: 'Large-Cap Dip Buyer',
     prompt:
-      'Buy TATAMOTORS, TITAN, SUNPHARMA, and BAJFINANCE on a 1.8% single-day dip when RSI(14) is below 48. Sell on RSI > 65, 3.5% stop-loss, 8% target, and 2% daily loss cap over 6M.',
+      'Buy TMPV, TITAN, SUNPHARMA, and BAJFINANCE on a 1.8% single-day dip when RSI(14) is below 48. Sell on RSI > 65, 3.5% stop-loss, 8% target, and 2% daily loss cap over 6M.',
   },
   {
     title: 'Trend Compounder',

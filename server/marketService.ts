@@ -38,8 +38,20 @@ for (const item of [...INDIAN_INDICES, ...INDIAN_STOCK_UNIVERSE]) {
   CATALOG_BY_SYMBOL.set(item.symbol.toUpperCase(), item);
 }
 
+// Corporate-action / demerger symbol remaps so legacy saved watchlists & holdings never 404
+const RETIRED_SYMBOL_REMAP: Record<string, string> = {
+  'TATAMOTORS.NS': 'TMPV.NS',
+  'TATAMOTORS.BO': 'TMPV.BO',
+  TATAMOTORS: 'TMPV.NS',
+};
+
+export function resolveActiveMarketSymbol(symbol: string): string {
+  const upper = symbol.trim().toUpperCase();
+  return RETIRED_SYMBOL_REMAP[upper] ?? upper;
+}
+
 export function findCatalogEntry(symbol: string): CatalogStock | undefined {
-  const upper = symbol.toUpperCase();
+  const upper = resolveActiveMarketSymbol(symbol);
   if (CATALOG_BY_SYMBOL.has(upper)) return CATALOG_BY_SYMBOL.get(upper);
   const tickerOnly = upper.replace(/\.(NS|BO)$/, '');
   return INDIAN_STOCK_UNIVERSE.find(
@@ -335,7 +347,7 @@ function buildQuoteFromDailyResult(
 }
 
 export async function getQuote(symbol: string): Promise<MarketQuote | null> {
-  const normalized = symbol.trim().toUpperCase();
+  const normalized = resolveActiveMarketSymbol(symbol);
   const cached = quoteCache.get(normalized);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.data;
@@ -430,7 +442,7 @@ export async function getChart(
   symbol: string,
   range: ChartRange = '6mo'
 ): Promise<ChartResponse | null> {
-  const normalized = symbol.trim().toUpperCase();
+  const normalized = resolveActiveMarketSymbol(symbol);
   const cacheKey = `${normalized}:${range}`;
   const cached = chartCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {

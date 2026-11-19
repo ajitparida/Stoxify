@@ -309,7 +309,7 @@ export function MarketChartTerminal({
               setSearchQuery(e.target.value);
               setSearchOpen(true);
             }}
-            placeholder="Search any NSE/BSE ticker (e.g. RELIANCE, TATAMOTORS, BEL)..."
+            placeholder="Search any NSE/BSE ticker (e.g. RELIANCE, TMPV, TMCV, BEL)..."
             className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600"
           />
           {searchOpen && (
