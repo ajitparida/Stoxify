@@ -30,7 +30,7 @@ export interface AnalyzePortfolioOptions {
   skipPortfolioSummary?: boolean;
 }
 
-const STOCK_AI_BATCH_SIZE = 40;
+const STOCK_AI_BATCH_SIZE = 15;
 const AI_BATCH_CONCURRENCY = 2;
 
 const RATING_CRITERIA =
@@ -38,6 +38,9 @@ const RATING_CRITERIA =
 
 const QUOTA_EXHAUSTED_NOTICE =
   'Gemini API free-tier daily quota (20 req/day) was reached. Displaying quantitative ratings grounded in live NSE/BSE prices, 50/200-DMA, RSI-14, ROCE, and Nifty 50 relative strength. Select a billing-enabled key in Settings > Secrets for full LLM commentary.';
+
+const TRANSIENT_FALLBACK_NOTICE =
+  'AI commentary temporarily fell back to the quantitative telemetry engine for one or more holdings. All verdicts, guardrails, and 1M–10Y projections remain grounded in live NSE/BSE prices, 50/200-DMA, RSI-14, ROCE, and Nifty 50 relative strength.';
 
 interface EnrichedTelemetryItem {
   symbol: string;
@@ -71,6 +74,31 @@ interface EnrichedTelemetryItem {
 function isQuotaOrRateLimitError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err ?? '');
   return /429|RESOURCE_EXHAUSTED|quota exceeded|rate[- ]limit/i.test(msg);
+}
+
+function safeParseJsonObject<T>(rawText: string | undefined | null): T | null {
+  if (!rawText) return null;
+  const stripped = rawText
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  if (!stripped) return null;
+
+  try {
+    return JSON.parse(stripped) as T;
+  } catch {
+    const firstBrace = stripped.indexOf('{');
+    const lastBrace = stripped.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      try {
+        return JSON.parse(stripped.slice(firstBrace, lastBrace + 1)) as T;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
 }
 
 interface RawGeminiRating extends HoldingAiRating {
@@ -353,6 +381,7 @@ async function evaluateTelemetryBatch(params: {
   actionPriority?: string;
   ratings: HoldingAiRating[];
   usedFallbackEngine: boolean;
+  quotaExhausted?: boolean;
 }> {
   const { ai, batch, nifty, includeExecutiveSummary, sectorBreakdownText } = params;
 
@@ -387,7 +416,7 @@ async function evaluateTelemetryBatch(params: {
 Nifty50: level=${nifty ? nifty.price : 'N/A'}, 1D=${nifty ? `${nifty.changePercent}%` : 'N/A'}, 6M=${nifty?.return6M ?? 'N/A'}%.
 ${summaryHint}
 Fields: s=symbol, ltp=livePrice, pnlPct=unrealizedPnl%, wtPct=portfolioWeight%, rsi=RSI14, sma50/sma200, r6m=6M return%, roce, pe, beta.
-${RATING_CRITERIA} Keep headline/rationale/keyRisk concise (1 sentence max each) and set realistic INR suggestedTarget and suggestedStopLoss relative to ltp plus p1m/p3m/p6m/p1y total % and cagr5y/cagr10y annual % CAGR.
+${RATING_CRITERIA} Keep headline (<=12 words), rationale (<=22 words), and keyRisk (<=16 words) crisp and single-line (no raw newlines or unescaped quotes), and set realistic INR suggestedTarget and suggestedStopLoss relative to ltp plus p1m/p3m/p6m/p1y total % and cagr5y/cagr10y annual % CAGR.
 Data:${JSON.stringify(compactTelemetry)}`;
 
   const schema = {
@@ -445,51 +474,74 @@ Data:${JSON.stringify(compactTelemetry)}`;
         contents: prompt,
         config: {
           thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
+          maxOutputTokens: 8192,
           systemInstruction:
-            'You are a quantitative Indian equity portfolio analyst. Output concise, objective, data-grounded portfolio diagnostics in valid JSON. Rate every holding provided.',
+            'You are a quantitative Indian equity portfolio analyst. Output concise, objective, data-grounded portfolio diagnostics in strictly valid JSON. Rate every holding provided.',
           responseMimeType: 'application/json',
           responseSchema: schema,
         },
       });
 
-      const parsed = JSON.parse((response.text ?? '{}').trim()) as {
+      const parsed = safeParseJsonObject<{
         overallSummary?: string;
         diversificationNote?: string;
         actionPriority?: string;
         ratings?: HoldingAiRating[];
-      };
+      }>(response.text);
 
-      const ratings = Array.isArray(parsed.ratings) ? parsed.ratings : [];
+      if (!parsed) {
+        lastError = new Error(`Malformed or truncated JSON response from ${candidate.model}`);
+        continue;
+      }
+
+      const ratings = Array.isArray(parsed.ratings)
+        ? parsed.ratings.filter((r) => Boolean(r && typeof r.symbol === 'string' && r.rating))
+        : [];
       if (ratings.length > 0) {
+        // Fill any omitted symbols in this batch via quantitative fallback so no holding is dropped
+        const ratedSet = new Set(ratings.map((r) => r.symbol.toUpperCase()));
+        const missingItems = batch.filter((item) => !ratedSet.has(item.symbol.toUpperCase()));
+        const supplementedRatings =
+          missingItems.length > 0
+            ? [
+                ...ratings,
+                ...evaluateBatchQuantFallback({
+                  batch: missingItems,
+                  nifty,
+                  sectorBreakdownText,
+                  includeExecutiveSummary: false,
+                }).ratings,
+              ]
+            : ratings;
+
         return {
           overallSummary: parsed.overallSummary,
           diversificationNote: parsed.diversificationNote,
           actionPriority: parsed.actionPriority,
-          ratings,
+          ratings: supplementedRatings,
           usedFallbackEngine: false,
         };
       }
+      lastError = new Error(`Empty ratings array returned from ${candidate.model}`);
     } catch (err) {
       lastError = err;
-      // On quota exhaustion / rate-limit try next model; otherwise retry/propagate
-      if (!isQuotaOrRateLimitError(err)) {
-        break;
-      }
     }
   }
 
-  if (isQuotaOrRateLimitError(lastError)) {
-    return evaluateBatchQuantFallback({
+  const quotaExhausted = isQuotaOrRateLimitError(lastError);
+  if (lastError && !quotaExhausted) {
+    console.warn('Portfolio AI batch fell back to quantitative engine:', lastError);
+  }
+
+  return {
+    ...evaluateBatchQuantFallback({
       batch,
       nifty,
       sectorBreakdownText,
       includeExecutiveSummary,
-    });
-  }
-
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('Unable to evaluate portfolio holdings right now.');
+    }),
+    quotaExhausted,
+  };
 }
 
 function applyGuardrails(
@@ -755,17 +807,19 @@ export async function analyzePortfolioHoldings(
     actionPriority?: string;
     ratings: HoldingAiRating[];
     usedFallbackEngine: boolean;
+    quotaExhausted?: boolean;
   }>;
 
   if (!process.env.GEMINI_API_KEY) {
-    batchResults = batches.map((batch, idx) =>
-      evaluateBatchQuantFallback({
+    batchResults = batches.map((batch, idx) => ({
+      ...evaluateBatchQuantFallback({
         batch,
         nifty,
         sectorBreakdownText,
         includeExecutiveSummary: idx === 0 && !options?.skipPortfolioSummary,
-      })
-    );
+      }),
+      quotaExhausted: false,
+    }));
   } else {
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY,
@@ -788,6 +842,7 @@ export async function analyzePortfolioHoldings(
   }
 
   const usedFallback = batchResults.some((r) => r.usedFallbackEngine);
+  const hadQuotaError = batchResults.some((r) => r.quotaExhausted);
   const combinedRawRatings = batchResults.flatMap((r) => r.ratings);
   const telemetryBySymbol = new Map(portfolioWithWeights.map((item) => [item.symbol, item]));
   const guardedRatings = applyGuardrails(combinedRawRatings, telemetryBySymbol);
@@ -841,7 +896,11 @@ export async function analyzePortfolioHoldings(
     portfolioProjection,
     benchmarkNifty6M: nifty?.return6M ?? null,
     analysisSource: usedFallback ? 'fallback_engine' : 'gemini',
-    quotaNotice: usedFallback ? QUOTA_EXHAUSTED_NOTICE : undefined,
+    quotaNotice: usedFallback
+      ? hadQuotaError || !process.env.GEMINI_API_KEY
+        ? QUOTA_EXHAUSTED_NOTICE
+        : TRANSIENT_FALLBACK_NOTICE
+      : undefined,
     analyzedAt: new Date().toISOString(),
   };
 }
@@ -1059,11 +1118,12 @@ Data: ${JSON.stringify(compactPayload)}`;
           },
         });
 
-        const parsed = JSON.parse((response.text ?? '{}').trim()) as Omit<RawGeminiRating, 'symbol'>;
+        const parsed = safeParseJsonObject<Omit<RawGeminiRating, 'symbol'>>(response.text);
         if (parsed?.rating) {
           rawRatings = [{ ...parsed, symbol }];
           break;
         }
+        lastError = new Error(`Malformed or empty JSON outlook from ${candidate.model}`);
       } catch (err) {
         lastError = err;
       }
