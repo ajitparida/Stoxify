@@ -116,6 +116,85 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    // Validation Blueprint: AlgoStrategy
+    function isValidAlgoStrategy(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'name', 'prompt', 'summary', 'symbols',
+          'timeframe', 'logicOperator', 'entryConditions', 'exitConditions',
+          'virtualCapital', 'allocationPercent', 'stopLossPct', 'takeProfitPct',
+          'trailingStopPct', 'maxOpenPositions', 'dailyLossCapPct', 'slippageBps',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'name', 'prompt', 'summary', 'symbols',
+          'timeframe', 'logicOperator', 'entryConditions', 'exitConditions',
+          'virtualCapital', 'allocationPercent', 'stopLossPct', 'takeProfitPct',
+          'trailingStopPct', 'maxOpenPositions', 'dailyLossCapPct', 'slippageBps',
+          'status', 'lastBacktestReturnPct', 'lastBacktestSharpe',
+          'lastBacktestMaxDrawdownPct', 'lastBacktestWinRatePct',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.prompt is string && data.prompt.size() >= 1 && data.prompt.size() <= 500
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 300
+        && data.symbols is list && data.symbols.size() >= 1 && data.symbols.size() <= 10 && data.symbols[0] is string && data.symbols[0].size() >= 1 && data.symbols[0].size() <= 32
+        && data.timeframe in ['1d', '5d', '1mo', '6mo', '1y']
+        && data.logicOperator in ['AND', 'OR']
+        && data.entryConditions is list && data.entryConditions.size() >= 1 && data.entryConditions.size() <= 6 && data.entryConditions[0] is map
+        && data.exitConditions is list && data.exitConditions.size() >= 0 && data.exitConditions.size() <= 6 && (data.exitConditions.size() == 0 || data.exitConditions[0] is map)
+        && data.virtualCapital is number && data.virtualCapital >= 10000 && data.virtualCapital <= 100000000
+        && data.allocationPercent is number && data.allocationPercent >= 5 && data.allocationPercent <= 100
+        && data.stopLossPct is number && data.stopLossPct >= 0.5 && data.stopLossPct <= 50
+        && data.takeProfitPct is number && data.takeProfitPct >= 0.5 && data.takeProfitPct <= 200
+        && data.trailingStopPct is number && data.trailingStopPct >= 0 && data.trailingStopPct <= 50
+        && data.maxOpenPositions is number && data.maxOpenPositions >= 1 && data.maxOpenPositions <= 20
+        && data.dailyLossCapPct is number && data.dailyLossCapPct >= 0.5 && data.dailyLossCapPct <= 25
+        && data.slippageBps is number && data.slippageBps >= 0 && data.slippageBps <= 100
+        && data.status in ['DRAFT', 'ACTIVE', 'PAUSED', 'PAUSED_RISK_CAP']
+        && (!('lastBacktestReturnPct' in data) || (data.lastBacktestReturnPct is number && data.lastBacktestReturnPct >= -100 && data.lastBacktestReturnPct <= 10000))
+        && (!('lastBacktestSharpe' in data) || (data.lastBacktestSharpe is number && data.lastBacktestSharpe >= -20 && data.lastBacktestSharpe <= 50))
+        && (!('lastBacktestMaxDrawdownPct' in data) || (data.lastBacktestMaxDrawdownPct is number && data.lastBacktestMaxDrawdownPct >= 0 && data.lastBacktestMaxDrawdownPct <= 100))
+        && (!('lastBacktestWinRatePct' in data) || (data.lastBacktestWinRatePct is number && data.lastBacktestWinRatePct >= 0 && data.lastBacktestWinRatePct <= 100))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: AlgoOrder
+    function isValidAlgoOrder(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'strategyId', 'strategyName', 'symbol',
+          'side', 'status', 'quantity', 'price', 'notionalValue',
+          'realizedPnl', 'triggerReason', 'executedAtIso', 'tradingDate',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'strategyId', 'strategyName', 'symbol',
+          'side', 'status', 'quantity', 'price', 'notionalValue',
+          'realizedPnl', 'triggerReason', 'executedAtIso', 'tradingDate',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && isValidId(data.strategyId)
+        && data.userId == request.auth.uid
+        && data.strategyName is string && data.strategyName.size() >= 1 && data.strategyName.size() <= 100
+        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_\\-\\.]+$')
+        && data.side in ['BUY', 'SELL']
+        && data.status in ['FILLED', 'BLOCKED_RISK_CAP', 'BLOCKED_FUNDS', 'CANCELLED']
+        && data.quantity is number && data.quantity >= 0 && data.quantity <= 10000000
+        && data.price is number && data.price > 0 && data.price <= 10000000
+        && data.notionalValue is number && data.notionalValue >= 0 && data.notionalValue <= 1000000000
+        && data.realizedPnl is number && data.realizedPnl >= -1000000000 && data.realizedPnl <= 1000000000
+        && data.triggerReason is string && data.triggerReason.size() >= 1 && data.triggerReason.size() <= 240
+        && data.executedAtIso is string && data.executedAtIso.size() >= 10 && data.executedAtIso.size() <= 40
+        && data.tradingDate is string && data.tradingDate.size() >= 10 && data.tradingDate.size() <= 20 && data.tradingDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // User Holdings Collection
     match /users/{userId}/holdings/{holdingId} {
       allow get: if isVerifiedOwner(userId) && isValidId(holdingId) && existing().userId == request.auth.uid;
@@ -207,6 +286,63 @@ service cloud.firestore {
         && incoming().updatedAt == request.time;
 
       allow delete: if isVerifiedOwner(userId) && isValidId(fundHoldingId) && existing().userId == request.auth.uid;
+    }
+
+    // User Algo Strategies Collection
+    match /users/{userId}/algoStrategies/{strategyId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(strategyId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(strategyId)
+        && isValidAlgoStrategy(incoming())
+        && incoming().id == strategyId
+        && incoming().userId == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(strategyId)
+        && isValidAlgoStrategy(incoming())
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          || incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'prompt', 'summary', 'symbols', 'timeframe', 'logicOperator',
+            'entryConditions', 'exitConditions', 'virtualCapital', 'allocationPercent',
+            'stopLossPct', 'takeProfitPct', 'trailingStopPct', 'maxOpenPositions',
+            'dailyLossCapPct', 'slippageBps', 'status', 'lastBacktestReturnPct',
+            'lastBacktestSharpe', 'lastBacktestMaxDrawdownPct', 'lastBacktestWinRatePct',
+            'updatedAt'
+          ])
+        )
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(strategyId) && existing().userId == request.auth.uid;
+    }
+
+    // User Algo Paper-Trade Orders Collection (Immutable Audit Ledger)
+    match /users/{userId}/algoOrders/{orderId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(orderId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(orderId)
+        && isValidAlgoOrder(incoming())
+        && incoming().id == orderId
+        && incoming().userId == userId
+        && exists(/databases/$(database)/documents/users/$(userId)/algoStrategies/$(incoming().strategyId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if false;
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(orderId) && existing().userId == request.auth.uid;
     }
   }
 }

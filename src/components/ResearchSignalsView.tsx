@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import { LineChart, Plus, RefreshCw } from 'lucide-react';
-import type { Exchange, MarketQuote, ResearchSignal } from '../types/market';
+import type { Exchange, LiveResearchSignal } from '../types/market';
 import type { ChartOverlayLevels } from './MarketChartTerminal';
 import { formatINR, formatPercent } from '../utils/portfolioAnalytics';
-
-type LiveSignalItem = ResearchSignal & { liveQuote: MarketQuote | null };
+import { ConfidenceBreakdownBar, EarningsRiskTag } from './ConfidenceBreakdownBar';
 
 interface ResearchSignalsViewProps {
   onInspectSignalChart: (symbol: string, levels: ChartOverlayLevels) => void;
@@ -24,7 +23,7 @@ export function ResearchSignalsView({
   onInspectSignalChart,
   onLogSignalPosition,
 }: ResearchSignalsViewProps) {
-  const [signals, setSignals] = useState<LiveSignalItem[]>([]);
+  const [signals, setSignals] = useState<LiveResearchSignal[]>([]);
   const [loading, setLoading] = useState(true);
   const [segment, setSegment] = useState<(typeof SEGMENTS)[number]>('All');
 
@@ -33,7 +32,7 @@ export function ResearchSignalsView({
     try {
       const res = await fetch('/api/market/signals');
       if (res.ok) {
-        const data = (await res.json()) as { signals: LiveSignalItem[] };
+        const data = (await res.json()) as { signals: LiveResearchSignal[] };
         setSignals(data.signals || []);
       }
     } finally {
@@ -54,10 +53,10 @@ export function ResearchSignalsView({
       <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-bold text-slate-900">
-            Structured Research Signal Cards
+            Evidence-Backed Research Signal Cards
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Sample algorithmic & fundamental trade setups priced against live NSE/BSE market quotes (educational research model, not SEBI investment advice).
+            Live NSE/BSE setups scored with calibrated 4-pillar Confidence (0–100%), live Yahoo Finance fundamentals, and 24-month walk-forward 1M/3M historical win rates (educational research model, not SEBI investment advice).
           </p>
         </div>
 
@@ -94,7 +93,7 @@ export function ResearchSignalsView({
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
-              className="h-64 bg-white border border-slate-200 rounded-xl animate-pulse"
+              className="h-80 bg-white border border-slate-200 rounded-xl animate-pulse"
             />
           ))}
         </div>
@@ -114,9 +113,9 @@ export function ResearchSignalsView({
                 key={sig.id}
                 className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col justify-between gap-4"
               >
-                <div className="space-y-3">
+                <div className="space-y-3.5">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-xs text-slate-500">
                         {sig.segment} · {sig.horizon} · {sig.sector}
                       </div>
@@ -126,6 +125,15 @@ export function ResearchSignalsView({
                           {sig.companyName}
                         </span>
                       </h3>
+                      {sig.fundamentals?.nextEarningsDate && (
+                        <div className="mt-1.5">
+                          <EarningsRiskTag
+                            nextEarningsDate={sig.fundamentals.nextEarningsDate}
+                            daysToEarnings={sig.fundamentals.daysToEarnings}
+                            earningsRiskFlag={sig.fundamentals.earningsRiskFlag}
+                          />
+                        </div>
+                      )}
                     </div>
                     <span
                       className={`text-xs font-bold tracking-wide px-2.5 py-1 rounded-md border shrink-0 ${
@@ -137,6 +145,48 @@ export function ResearchSignalsView({
                       {sig.action}
                     </span>
                   </div>
+
+                  {/* Calibrated 4-Pillar Confidence Score */}
+                  {sig.confidence && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <ConfidenceBreakdownBar confidence={sig.confidence} variant="compact" />
+                    </div>
+                  )}
+
+                  {/* Walk-Forward Historical Pattern Evidence */}
+                  {sig.walkForward && sig.walkForward.sampleCount > 0 && (
+                    <div className="flex items-center justify-between gap-2 px-3 py-2 bg-slate-50 rounded-lg text-[11px] font-mono-tabular">
+                      <div>
+                        <span className="text-slate-500">1M Win </span>
+                        <span className="font-semibold text-slate-900">
+                          {sig.walkForward.winRate1M !== null
+                            ? `${sig.walkForward.winRate1M.toFixed(0)}%`
+                            : '—'}
+                        </span>
+                        <span className="text-slate-300 mx-1.5">·</span>
+                        <span className="text-slate-500">3M Win </span>
+                        <span className="font-semibold text-slate-900">
+                          {sig.walkForward.winRate3M !== null
+                            ? `${sig.walkForward.winRate3M.toFixed(0)}%`
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span
+                          className={`font-semibold ${
+                            (sig.walkForward.avgReturn3M ?? 0) >= 0
+                              ? 'text-green-700'
+                              : 'text-red-700'
+                          }`}
+                        >
+                          {formatPercent(sig.walkForward.avgReturn3M)} 3M avg
+                        </span>
+                        <span className="text-[10px] text-slate-400 ml-1">
+                          (n={sig.walkForward.sampleCount})
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Live LTP + Upside */}
                   <div className="flex items-baseline justify-between py-2.5 px-3 bg-slate-50 border border-slate-100 rounded-lg">
@@ -186,9 +236,9 @@ export function ResearchSignalsView({
                       <span>SL {formatINR(sig.stopLoss)}</span>
                       <span>Target {formatINR(sig.targetPrice)}</span>
                     </div>
-                    <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                    <div className="h-1.5 bg-slate-100 rounded-xs overflow-hidden">
                       <div
-                        className="h-full bg-blue-700 rounded-full"
+                        className="h-full bg-blue-700"
                         style={{ width: `${progressPct}%` }}
                       />
                     </div>
@@ -208,7 +258,7 @@ export function ResearchSignalsView({
                         stopLoss: sig.stopLoss,
                       })
                     }
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
                   >
                     <LineChart className="w-3.5 h-3.5" /> View Levels
                   </button>
@@ -224,7 +274,7 @@ export function ResearchSignalsView({
                         source: 'signal',
                       })
                     }
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800"
+                    className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 whitespace-nowrap shrink-0"
                   >
                     <Plus className="w-3.5 h-3.5" /> Log Position
                   </button>

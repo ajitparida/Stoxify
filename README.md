@@ -40,6 +40,11 @@
 - **AI Quantitative Stock Strategies**: 4 live NSE model baskets (*Bharat Momentum Leaders*, *Undervalued Compounders*, *Domestic Capex & Mid-Cap Alpha*, *Quality Value & Low-Beta Shield*) tracked with `6M / 1Y` normalized curves vs. Nifty 50 (`^NSEI`), monthly profit-lock rotation logs, and one-click buy staging.
 - **Smart Capital Rotation**: Inside `HealthDiagnosticsView`, flags triple-digit/extended winners (`TRIM_PROFIT`) and chronic 200-DMA laggards (`EXIT_LAGGARD`) and pairs each with high-ROCE, undervalued NSE replacement candidates.
 
+### 7. Algo Trading & Historical Backtesting Lab (`AlgoTradingView`)
+- **AI Natural-Language Strategy Compiler**: Converts plain-English strategy ideas into structured, editable technical predicates (`RSI_14`, `PRICE_VS_SMA50`, `PRICE_VS_SMA200`, `EMA20_VS_SMA50`, `VOLUME_RATIO`, `DAY_CHANGE_PCT`, `SMA50_SLOPE_PCT`) via Gemini with deterministic regex/rule-parser fallback.
+- **Historical OHLCV Backtester**: Simulates multi-symbol bar-by-bar execution over warmed-up `1D / 5D / 1M / 6M / 1Y` Yahoo Finance OHLCV candles, outputting an indexed Equity Curve vs. Nifty 50 (`^NSEI`), Drawdown chart, Sharpe ratio, Max Drawdown, Win Rate, Profit Factor, and trade-by-trade execution ledger.
+- **Live Automated Paper-Trade Engine & Risk Guardrails**: Evaluates active bots against live NSE prices (`Scan Live Ticks` + 30s auto-scan toggle) with per-trade Stop-Loss, Take-Profit, Trailing Stop, Max Open Positions, and Daily Loss Cap Circuit-Breakers (`PAUSED_RISK_CAP`) synced to Cloud Firestore.
+
 ---
 
 ## Tech Stack
@@ -68,6 +73,7 @@
 │   ├── marketService.ts               # Live NSE/BSE quotes, OHLCV charts, SMA/EMA/RSI, search, screener & signals
 │   ├── portfolioAnalyzer.ts           # Single-symbol AI Outlook, batched portfolio AI audit, guardrails & 6M-10Y forecasts
 │   ├── capitalRotationService.ts      # Smart Capital Rotation pairings & 4 Nifty-benchmarked NSE quantitative strategy baskets
+│   ├── algoEngineService.ts           # AI strategy rule compiler, OHLCV historical backtester & live paper-trade risk evaluator
 │   ├── screenshotParser.ts            # Multi-image equity broker screenshot parser via Gemini Vision
 │   ├── csvParser.ts                   # Zero-AI Zerodha Kite (equity) & Zerodha Coin (MF) CSV parsers
 │   ├── mutualFundService.ts           # AMFI scheme search, NAV history, XIRR, FIFO tax, tiered exit load & TER bleed
@@ -88,6 +94,7 @@
         ├── ProScreenerView.tsx        # Sortable/filterable NSE/BSE screener
         ├── ResearchSignalsView.tsx    # Trade signal cards with chart level plotting
         ├── AiStrategiesView.tsx       # 4 benchmarked NSE quantitative strategy baskets & rotation ledger
+        ├── AlgoTradingView.tsx        # AI rule compiler, historical OHLCV backtester, live paper positions & order book
         ├── AddHoldingModal.tsx        # Add/edit equity holding modal with ticker search
         ├── AddMutualFundModal.tsx     # Add/edit mutual fund holding modal with AMFI search
         ├── ScreenshotImportModal.tsx  # Equity CSV & screenshot multi-file upload/review modal
@@ -113,6 +120,9 @@ All API routes are served from `server.ts` on `/api/*`.
 | `GET` | `/api/market/signals` | Live research signal feed calibrated with current market prices. |
 | `GET` | `/api/market/ai-outlook/:symbol?refresh=1` | Single-symbol AI Outlook (`BUY`/`HOLD`/`EXIT`, thesis, key risk, Target, Stop-Loss, and `6M / 1Y / 5Y / 10Y` predictions). Server-cached for 10 minutes unless `refresh=1`. |
 | `GET` | `/api/strategies` | Returns 4 live NSE quantitative stock strategy baskets with `1M / 6M / 1Y` normalized performance curves vs. Nifty 50 (`^NSEI`), monthly rotation logs, and constituent metrics. |
+| `POST` | `/api/algo/compile` | Compiles plain-English trading rules (`{ prompt }`) into structured entry/exit predicates and risk guardrails via Gemini (`fallback_engine` on quota exhaustion). |
+| `POST` | `/api/algo/backtest` | Executes multi-symbol bar-by-bar OHLCV historical simulation (`{ strategy }`) with Nifty 50 benchmark, drawdown, Sharpe, win rate, and trade ledger. |
+| `POST` | `/api/algo/paper-evaluate` | Evaluates active paper-trading strategies (`{ strategies, orders }`) against live NSE quotes and triggers simulated fills or daily loss cap circuit-breakers. |
 
 ### Equity Portfolio Endpoints
 | Method | Endpoint | Description |
@@ -140,6 +150,8 @@ When signed in with a verified Google account, Stoxify scopes all persistent doc
 - `/users/{userId}/holdings/{holdingId}` — Equity holdings (`symbol`, `companyName`, `exchange` in `NSE|BSE`, `sector`, `quantity`, `avgBuyPrice`, `buyDate`, `notes`, `source` in `manual|screenshot|signal`).
 - `/users/{userId}/watchlist/{itemId}` — Watchlist items (`symbol`, `companyName`, `exchange`, `sector`, `targetAlertPrice`).
 - `/users/{userId}/mutualFunds/{fundHoldingId}` — Mutual fund holdings (`schemeCode`, `schemeName`, `fundHouse`, `category`, `planType` in `Direct|Regular`, `optionType` in `Growth|IDCW`, `units`, `avgNav`, `purchaseDate`, `isSip`, `monthlySipAmount`, `folioNumber`, `source` in `manual|screenshot|cas_pdf`).
+- `/users/{userId}/algoStrategies/{strategyId}` — Algorithmic trading strategies (`name`, `prompt`, `symbols`, `entryConditions`, `exitConditions`, `stopLossPct`, `takeProfitPct`, `dailyLossCapPct`, `status` in `DRAFT|ACTIVE|PAUSED|PAUSED_RISK_CAP`).
+- `/users/{userId}/algoOrders/{orderId}` — Append-only simulated paper-trade order & guardrail audit ledger (`strategyId`, `symbol`, `side` in `BUY|SELL`, `status` in `FILLED|BLOCKED_RISK_CAP|BLOCKED_FUNDS|CANCELLED`, `quantity`, `price`, `realizedPnl`, `tradingDate`).
 
 Security rules (`firestore.rules`) enforce:
 - Default-deny catch-all at root.

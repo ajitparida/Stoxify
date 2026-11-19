@@ -25,6 +25,12 @@ import {
   formatPercent,
   type PortfolioDiagnosticsSummary,
 } from '../utils/portfolioAnalytics';
+import {
+  ConfidenceBreakdownBar,
+  EarningsRiskTag,
+  getConfidenceScoreTone,
+} from './ConfidenceBreakdownBar';
+import { PortfolioHedgeCalculator } from './PortfolioHedgeCalculator';
 
 interface AiBatchProgress {
   currentBatch: number;
@@ -82,6 +88,7 @@ export function HealthDiagnosticsView({
   onInspectChart,
 }: HealthDiagnosticsViewProps) {
   const nifty6M = niftyQuote?.return6M ?? null;
+  const totalEquityValue = holdings.reduce((sum, h) => sum + h.currentValue, 0);
 
   const ratingBySymbol = new Map(
     (aiAnalysis?.ratings ?? []).map((r) => [r.symbol.toUpperCase(), r])
@@ -349,24 +356,50 @@ export function HealthDiagnosticsView({
                   >
                     <div className="space-y-2.5">
                       <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="text-xs text-slate-500">
-                            {item.conviction} Conviction
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap text-xs text-slate-500">
+                            {item.confidence ? (
+                              <span
+                                className={`font-mono-tabular font-bold ${getConfidenceScoreTone(
+                                  item.confidence.overallScore
+                                )}`}
+                              >
+                                {item.confidence.overallScore.toFixed(1)}% Confidence
+                              </span>
+                            ) : (
+                              <span>{item.conviction} Conviction</span>
+                            )}
                             {holding && (
                               <>
-                                <span className="mx-1.5">·</span>
+                                <span>·</span>
                                 <span className="font-mono-tabular">
                                   P&amp;L {formatPercent(holding.totalPnlPercent)}
                                 </span>
                               </>
                             )}
+                            {item.fundamentals?.source === 'live_yahoo' && (
+                              <>
+                                <span>·</span>
+                                <span className="text-[10px] font-semibold text-emerald-700">
+                                  Live Yahoo
+                                </span>
+                              </>
+                            )}
                           </div>
-                          <h4 className="text-sm font-bold text-slate-900 mt-0.5">
-                            {item.symbol.replace(/\.(NS|BO)$/, '')}{' '}
-                            <span className="font-normal text-slate-500 text-xs">
-                              {holding?.companyName}
-                            </span>
-                          </h4>
+                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                            <h4 className="text-sm font-bold text-slate-900">
+                              {item.symbol.replace(/\.(NS|BO)$/, '')}{' '}
+                              <span className="font-normal text-slate-500 text-xs">
+                                {holding?.companyName}
+                              </span>
+                            </h4>
+                            <EarningsRiskTag
+                              nextEarningsDate={item.fundamentals?.nextEarningsDate}
+                              daysToEarnings={item.fundamentals?.daysToEarnings}
+                              earningsRiskFlag={item.fundamentals?.earningsRiskFlag}
+                              compact
+                            />
+                          </div>
                         </div>
                         <span
                           className={`px-2.5 py-1 text-xs font-bold border rounded-md shrink-0 ${verdictClasses}`}
@@ -374,6 +407,12 @@ export function HealthDiagnosticsView({
                           {item.rating}
                         </span>
                       </div>
+
+                      {item.confidence && (
+                        <div className="pt-1.5 border-t border-slate-100">
+                          <ConfidenceBreakdownBar confidence={item.confidence} variant="compact" />
+                        </div>
+                      )}
 
                       <div className="text-xs font-semibold text-slate-800">{item.headline}</div>
                       <p className="text-xs text-slate-600 leading-relaxed">{item.rationale}</p>
@@ -491,6 +530,13 @@ export function HealthDiagnosticsView({
           </div>
         )}
       </div>
+
+      {/* Portfolio 80/20 Cash Reserve & Live Index Bear Put Spread Hedge Calculator */}
+      <PortfolioHedgeCalculator
+        totalEquityValue={totalEquityValue}
+        weightedBeta={diagnostics.weightedBeta}
+        niftyQuote={niftyQuote}
+      />
 
       {/* Smart Capital Rotation — Lock Gains & Redeploy */}
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
@@ -1069,6 +1115,7 @@ export function HealthDiagnosticsView({
                 <th className="py-2.5 px-3 text-right">vs 200-DMA</th>
                 <th className="py-2.5 px-3 text-right">RSI (14)</th>
                 <th className="py-2.5 px-3 text-right">6M Return</th>
+                <th className="py-2.5 px-3 text-right">Confidence</th>
                 <th className="py-2.5 px-3">AI Rating</th>
                 <th className="py-2.5 px-4">Diagnostic Verdict</th>
               </tr>
@@ -1084,6 +1131,7 @@ export function HealthDiagnosticsView({
                     ? ((h.livePrice - h.quote.sma200) / h.quote.sma200) * 100
                     : null;
                 const aiRating = ratingBySymbol.get(h.symbol.toUpperCase());
+                const confScore = aiRating?.confidence?.overallScore ?? h.quote?.confidence?.overallScore ?? null;
 
                 return (
                   <tr
@@ -1098,7 +1146,15 @@ export function HealthDiagnosticsView({
                     className="hover:bg-slate-50 cursor-pointer"
                   >
                     <td className="py-2.5 px-4 font-semibold text-slate-900">
-                      {h.symbol.replace(/\.(NS|BO)$/, '')}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span>{h.symbol.replace(/\.(NS|BO)$/, '')}</span>
+                        <EarningsRiskTag
+                          nextEarningsDate={aiRating?.fundamentals?.nextEarningsDate}
+                          daysToEarnings={aiRating?.fundamentals?.daysToEarnings}
+                          earningsRiskFlag={aiRating?.fundamentals?.earningsRiskFlag}
+                          compact
+                        />
+                      </div>
                       <div className="text-[11px] font-normal text-slate-500">
                         {h.weightPercent.toFixed(1)}% weight
                       </div>
@@ -1131,6 +1187,15 @@ export function HealthDiagnosticsView({
                       }`}
                     >
                       {formatPercent(h.quote?.return6M)}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono-tabular font-bold">
+                      {confScore !== null ? (
+                        <span className={getConfidenceScoreTone(confScore)}>
+                          {confScore.toFixed(1)}%
+                        </span>
+                      ) : (
+                        <span className="font-normal text-slate-400">—</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 font-bold">
                       {aiRating ? (

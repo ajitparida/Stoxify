@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
   Activity,
+  Bot,
   Briefcase,
   CandlestickChart,
   Filter,
@@ -19,26 +20,35 @@ import {
 } from 'lucide-react';
 import {
   auth,
+  batchCreateAlgoOrders,
   batchCreateHoldings,
   batchCreateMutualFundHoldings,
+  batchDeleteAlgoOrders,
   batchDeleteHoldings,
   batchDeleteMutualFundHoldings,
+  createAlgoStrategy,
   createHolding,
   createMutualFundHolding,
+  deleteAlgoStrategy,
   deleteHolding,
   deleteMutualFundHolding,
   removeWatchlistItem,
   signInWithGoogle,
   signOutUser,
+  subscribeAlgoOrders,
+  subscribeAlgoStrategies,
   subscribeHoldings,
   subscribeMutualFunds,
   subscribeWatchlist,
+  updateAlgoStrategy,
+  updateAlgoStrategyStatus,
   updateHolding,
   updateMutualFundHolding,
   upsertWatchlistItem,
 } from './firebase';
 import { AddHoldingModal } from './components/AddHoldingModal';
 import { AddMutualFundModal } from './components/AddMutualFundModal';
+import { AlgoTradingView } from './components/AlgoTradingView';
 import { ConfirmActionModal } from './components/ConfirmActionModal';
 import { HealthDiagnosticsView } from './components/HealthDiagnosticsView';
 import { MarketChartTerminal, type ChartOverlayLevels } from './components/MarketChartTerminal';
@@ -51,6 +61,12 @@ import { ResearchSignalsView } from './components/ResearchSignalsView';
 import { ScreenshotImportModal } from './components/ScreenshotImportModal';
 import { AiStrategiesView } from './components/AiStrategiesView';
 import type {
+  AlgoOrderDraft,
+  AlgoOrderRecord,
+  AlgoPaperEvaluateResponse,
+  AlgoStrategyDraft,
+  AlgoStrategyRecord,
+  AlgoStrategyStatus,
   CapitalRotationResponse,
   Exchange,
   HoldingRecord,
@@ -62,6 +78,7 @@ import type {
   MfPlanType,
   MutualFundAnalysisResponse,
   MutualFundHoldingRecord,
+  PaperPositionSnapshot,
   PortfolioAnalysisResponse,
   RotationReplacementPick,
   WatchlistRecord,
@@ -84,7 +101,8 @@ type WorkspaceTab =
   | 'charts'
   | 'screener'
   | 'signals'
-  | 'strategies';
+  | 'strategies'
+  | 'algo';
 
 const NAV_GROUPS: Array<{
   groupLabel: string | null;
@@ -109,6 +127,7 @@ const NAV_GROUPS: Array<{
       { key: 'screener', label: 'Pro Stock Screener', icon: Filter },
       { key: 'signals', label: 'Research Signals', icon: Sparkles },
       { key: 'strategies', label: 'AI Strategies', icon: TrendingUp },
+      { key: 'algo', label: 'Algo Trading Lab', icon: Bot },
     ],
   },
 ];
@@ -145,9 +164,16 @@ export default function App() {
   const [cloudHoldings, setCloudHoldings] = useState<HoldingRecord[]>([]);
   const [cloudWatchlist, setCloudWatchlist] = useState<WatchlistRecord[]>([]);
   const [cloudMutualFunds, setCloudMutualFunds] = useState<MutualFundHoldingRecord[]>([]);
+  const [cloudAlgoStrategies, setCloudAlgoStrategies] = useState<AlgoStrategyRecord[]>([]);
+  const [cloudAlgoOrders, setCloudAlgoOrders] = useState<AlgoOrderRecord[]>([]);
   const [guestHoldings, setGuestHoldings] = useState<HoldingRecord[]>([]);
   const [guestWatchlist, setGuestWatchlist] = useState<string[]>(DEFAULT_WATCHLIST_SYMBOLS);
   const [guestMutualFunds, setGuestMutualFunds] = useState<MutualFundHoldingRecord[]>([]);
+  const [guestAlgoStrategies, setGuestAlgoStrategies] = useState<AlgoStrategyRecord[]>([]);
+  const [guestAlgoOrders, setGuestAlgoOrders] = useState<AlgoOrderRecord[]>([]);
+  const [paperEvalResult, setPaperEvalResult] = useState<AlgoPaperEvaluateResponse | null>(null);
+  const [paperEvalLoading, setPaperEvalLoading] = useState(false);
+  const [autoTickAlgo, setAutoTickAlgo] = useState(true);
 
   // Market Data State
   const [quotes, setQuotes] = useState<Record<string, MarketQuote>>({});
@@ -226,6 +252,8 @@ export default function App() {
       setCloudHoldings([]);
       setCloudWatchlist([]);
       setCloudMutualFunds([]);
+      setCloudAlgoStrategies([]);
+      setCloudAlgoOrders([]);
       return;
     }
 
@@ -256,15 +284,37 @@ export default function App() {
       }
     );
 
+    const unsubAlgoStrategies = subscribeAlgoStrategies(
+      user.uid,
+      (items) => setCloudAlgoStrategies(items),
+      (err) => {
+        console.error(err);
+        showToast('Unable to sync cloud algo strategies.', 'error');
+      }
+    );
+
+    const unsubAlgoOrders = subscribeAlgoOrders(
+      user.uid,
+      (items) => setCloudAlgoOrders(items),
+      (err) => {
+        console.error(err);
+        showToast('Unable to sync cloud paper order book.', 'error');
+      }
+    );
+
     return () => {
       unsubHoldings();
       unsubWatchlist();
       unsubMutualFunds();
+      unsubAlgoStrategies();
+      unsubAlgoOrders();
     };
   }, [authReady, user, showToast]);
 
   const activeHoldings = user ? cloudHoldings : guestHoldings;
   const activeMutualFunds = user ? cloudMutualFunds : guestMutualFunds;
+  const activeAlgoStrategies = user ? cloudAlgoStrategies : guestAlgoStrategies;
+  const activeAlgoOrders = user ? cloudAlgoOrders : guestAlgoOrders;
   const activeWatchlistSymbols = useMemo(() => {
     if (user) {
       return cloudWatchlist.length > 0
@@ -281,9 +331,10 @@ export default function App() {
       '^NSEBANK',
       ...activeHoldings.map((h) => h.symbol),
       ...activeWatchlistSymbols,
+      ...activeAlgoStrategies.flatMap((s) => s.symbols),
     ]);
     return Array.from(set);
-  }, [activeHoldings, activeWatchlistSymbols]);
+  }, [activeHoldings, activeWatchlistSymbols, activeAlgoStrategies]);
 
   const fetchQuotes = useCallback(async () => {
     if (symbolsToPoll.length === 0) return;
@@ -1066,6 +1117,319 @@ export default function App() {
     }
   };
 
+  const evaluatePaperEngine = useCallback(
+    async (
+      strategiesOverride?: AlgoStrategyRecord[],
+      ordersOverride?: AlgoOrderRecord[]
+    ) => {
+      const targetStrategies = strategiesOverride ?? activeAlgoStrategies;
+      const targetOrders = ordersOverride ?? activeAlgoOrders;
+
+      if (targetStrategies.length === 0) {
+        setPaperEvalResult({
+          newOrders: [],
+          strategyStatusUpdates: [],
+          openPositions: [],
+          strategyTelemetry: [],
+          evaluatedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      setPaperEvalLoading(true);
+      try {
+        const res = await fetch('/api/algo/paper-evaluate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            strategies: targetStrategies,
+            orders: targetOrders,
+          }),
+        });
+        if (!res.ok) {
+          const errBody = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(errBody.error || 'Paper engine scan failed.');
+        }
+        const evalData = (await res.json()) as AlgoPaperEvaluateResponse;
+        setPaperEvalResult(evalData);
+
+        if (evalData.newOrders.length > 0) {
+          if (user) {
+            await batchCreateAlgoOrders(user.uid, evalData.newOrders);
+          } else {
+            const stamped: AlgoOrderRecord[] = evalData.newOrders.map((o, idx) => ({
+              ...o,
+              id: `g_ord_${Date.now()}_${idx}`,
+              userId: 'guest',
+            }));
+            setGuestAlgoOrders((prev) => [...stamped, ...prev]);
+          }
+        }
+
+        if (evalData.strategyStatusUpdates.length > 0) {
+          for (const upd of evalData.strategyStatusUpdates) {
+            if (user) {
+              await updateAlgoStrategyStatus(user.uid, upd.strategyId, upd.status);
+            } else {
+              setGuestAlgoStrategies((prev) =>
+                prev.map((s) => (s.id === upd.strategyId ? { ...s, status: upd.status } : s))
+              );
+            }
+          }
+          showToast(evalData.strategyStatusUpdates[0].reason, 'error');
+        } else if (evalData.newOrders.length > 0) {
+          showToast(
+            `Paper bot executed ${evalData.newOrders.length} simulated ${
+              evalData.newOrders.length === 1 ? 'order' : 'orders'
+            }.`
+          );
+        }
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Unable to evaluate live paper bots.',
+          'error'
+        );
+      } finally {
+        setPaperEvalLoading(false);
+      }
+    },
+    [activeAlgoStrategies, activeAlgoOrders, user, showToast]
+  );
+
+  // Periodically evaluate active paper bots every 30s when Auto-Scan is active
+  useEffect(() => {
+    const hasActiveBot = activeAlgoStrategies.some((s) => s.status === 'ACTIVE');
+    if (!autoTickAlgo || !hasActiveBot) return;
+    const timer = setInterval(() => {
+      void evaluatePaperEngine();
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [autoTickAlgo, activeAlgoStrategies, evaluatePaperEngine]);
+
+  // Refresh open positions view on entering Algo Lab if strategies already exist
+  useEffect(() => {
+    if (activeTab === 'algo' && activeAlgoStrategies.length > 0 && !paperEvalResult) {
+      void evaluatePaperEngine();
+    }
+  }, [activeTab, activeAlgoStrategies.length, paperEvalResult, evaluatePaperEngine]);
+
+  const handleSaveAlgoStrategy = async (
+    draft: AlgoStrategyDraft,
+    options?: {
+      existingId?: string;
+      status?: AlgoStrategyStatus;
+      backtestSummary?: {
+        totalReturnPct: number;
+        sharpeRatio: number;
+        maxDrawdownPct: number;
+        winRatePct: number;
+      };
+    }
+  ): Promise<string | void> => {
+    const targetStatus: AlgoStrategyStatus = options?.status ?? 'DRAFT';
+    const btPatch = options?.backtestSummary
+      ? {
+          lastBacktestReturnPct: options.backtestSummary.totalReturnPct,
+          lastBacktestSharpe: options.backtestSummary.sharpeRatio,
+          lastBacktestMaxDrawdownPct: options.backtestSummary.maxDrawdownPct,
+          lastBacktestWinRatePct: options.backtestSummary.winRatePct,
+        }
+      : {};
+
+    try {
+      let savedId = options?.existingId;
+      let nextStrategiesList = activeAlgoStrategies;
+
+      if (user) {
+        if (savedId) {
+          await updateAlgoStrategy(user.uid, savedId, {
+            ...draft,
+            status: targetStatus,
+            ...btPatch,
+          });
+        } else {
+          savedId = await createAlgoStrategy(user.uid, {
+            ...draft,
+            status: targetStatus,
+            ...btPatch,
+          });
+        }
+        const newRec: AlgoStrategyRecord = {
+          ...draft,
+          ...btPatch,
+          id: savedId,
+          userId: user.uid,
+          status: targetStatus,
+        };
+        nextStrategiesList = activeAlgoStrategies.some((s) => s.id === savedId)
+          ? activeAlgoStrategies.map((s) => (s.id === savedId ? newRec : s))
+          : [newRec, ...activeAlgoStrategies];
+      } else {
+        savedId = savedId || `guest_algo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+        const newRec: AlgoStrategyRecord = {
+          ...draft,
+          ...btPatch,
+          id: savedId,
+          userId: 'guest',
+          status: targetStatus,
+        };
+        nextStrategiesList = activeAlgoStrategies.some((s) => s.id === savedId)
+          ? activeAlgoStrategies.map((s) => (s.id === savedId ? newRec : s))
+          : [newRec, ...activeAlgoStrategies];
+        setGuestAlgoStrategies(nextStrategiesList);
+      }
+
+      showToast(
+        targetStatus === 'ACTIVE'
+          ? `Strategy "${draft.name}" saved and activated for paper trading.`
+          : `Strategy "${draft.name}" saved as draft.`
+      );
+
+      if (targetStatus === 'ACTIVE') {
+        await evaluatePaperEngine(nextStrategiesList, activeAlgoOrders);
+      }
+      return savedId;
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to save algo strategy.', 'error');
+    }
+  };
+
+  const handleToggleAlgoStatus = async (
+    strategy: AlgoStrategyRecord,
+    nextStatus: AlgoStrategyStatus
+  ) => {
+    try {
+      const nextList = activeAlgoStrategies.map((s) =>
+        s.id === strategy.id ? { ...s, status: nextStatus } : s
+      );
+      if (user) {
+        await updateAlgoStrategyStatus(user.uid, strategy.id, nextStatus);
+      } else {
+        setGuestAlgoStrategies(nextList);
+      }
+      showToast(`"${strategy.name}" status set to ${nextStatus}.`);
+      if (nextStatus === 'ACTIVE') {
+        await evaluatePaperEngine(nextList, activeAlgoOrders);
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update bot status.', 'error');
+    }
+  };
+
+  const handleDeleteAlgoStrategy = async (strategyId: string) => {
+    try {
+      if (user) {
+        await deleteAlgoStrategy(user.uid, strategyId);
+      } else {
+        setGuestAlgoStrategies((prev) => prev.filter((s) => s.id !== strategyId));
+      }
+      showToast('Algo strategy deleted.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to delete strategy.', 'error');
+    }
+  };
+
+  const handleHaltAllBots = async () => {
+    const activeOnes = activeAlgoStrategies.filter((s) => s.status === 'ACTIVE');
+    if (activeOnes.length === 0) return;
+    try {
+      setAutoTickAlgo(false);
+      const nextList = activeAlgoStrategies.map((s) =>
+        s.status === 'ACTIVE' ? { ...s, status: 'PAUSED' as AlgoStrategyStatus } : s
+      );
+      if (user) {
+        await Promise.all(
+          activeOnes.map((s) => updateAlgoStrategyStatus(user.uid, s.id, 'PAUSED'))
+        );
+      } else {
+        setGuestAlgoStrategies(nextList);
+      }
+      setPaperEvalResult((prev) =>
+        prev
+          ? {
+              ...prev,
+              strategyTelemetry: prev.strategyTelemetry.map((t) =>
+                t.status === 'ACTIVE' ? { ...t, status: 'PAUSED' } : t
+              ),
+              evaluatedAt: new Date().toISOString(),
+            }
+          : prev
+      );
+      showToast(`Emergency halt executed: paused ${activeOnes.length} active paper trading bots.`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to halt active bots.', 'error');
+    }
+  };
+
+  const handleSquareOffPaperPosition = async (pos: PaperPositionSnapshot) => {
+    const livePrice = quotes[pos.symbol]?.price ?? pos.livePrice;
+    const proceeds = Number((pos.quantity * livePrice).toFixed(2));
+    const realizedPnl = Number((proceeds - pos.investedValue).toFixed(2));
+    const nowIso = new Date().toISOString();
+    const todayIst = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+
+    const draftOrder: AlgoOrderDraft = {
+      strategyId: pos.strategyId,
+      strategyName: pos.strategyName,
+      symbol: pos.symbol,
+      side: 'SELL',
+      status: 'FILLED',
+      quantity: pos.quantity,
+      price: livePrice,
+      notionalValue: proceeds,
+      realizedPnl,
+      triggerReason: `Manual square-off at ₹${livePrice}`,
+      executedAtIso: nowIso,
+      tradingDate: todayIst,
+    };
+
+    try {
+      let nextOrders = activeAlgoOrders;
+      if (user) {
+        await batchCreateAlgoOrders(user.uid, [draftOrder]);
+        nextOrders = [
+          { ...draftOrder, id: `tmp_${Date.now()}`, userId: user.uid },
+          ...activeAlgoOrders,
+        ];
+      } else {
+        const rec: AlgoOrderRecord = {
+          ...draftOrder,
+          id: `g_sq_${Date.now()}`,
+          userId: 'guest',
+        };
+        nextOrders = [rec, ...activeAlgoOrders];
+        setGuestAlgoOrders(nextOrders);
+      }
+      showToast(`Squared off ${pos.quantity} ${pos.ticker} at ${formatINR(livePrice)}.`);
+      await evaluatePaperEngine(activeAlgoStrategies, nextOrders);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to square off paper position.', 'error');
+    }
+  };
+
+  const handleClearAlgoOrders = async () => {
+    if (activeAlgoOrders.length === 0) return;
+    try {
+      if (user) {
+        await batchDeleteAlgoOrders(
+          user.uid,
+          cloudAlgoOrders.map((o) => o.id)
+        );
+      } else {
+        setGuestAlgoOrders([]);
+      }
+      await evaluatePaperEngine(activeAlgoStrategies, []);
+      showToast('Paper order book cleared.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to clear order book.', 'error');
+    }
+  };
+
   const activeNavTitle = ALL_NAV_ITEMS.find((n) => n.key === activeTab)?.label || 'Workspace';
 
   return (
@@ -1595,6 +1959,27 @@ export default function App() {
                 });
                 setAddModalOpen(true);
               }}
+            />
+          )}
+
+          {activeTab === 'algo' && (
+            <AlgoTradingView
+              strategies={activeAlgoStrategies}
+              orders={activeAlgoOrders}
+              quotes={quotes}
+              isGuestMode={!user}
+              paperEvalResult={paperEvalResult}
+              paperEvalLoading={paperEvalLoading}
+              autoTickEnabled={autoTickAlgo}
+              onToggleAutoTick={() => setAutoTickAlgo((prev) => !prev)}
+              onEvaluatePaperNow={() => void evaluatePaperEngine()}
+              onSaveStrategy={handleSaveAlgoStrategy}
+              onToggleStrategyStatus={handleToggleAlgoStatus}
+              onDeleteStrategy={handleDeleteAlgoStrategy}
+              onHaltAllBots={handleHaltAllBots}
+              onSquareOffPosition={handleSquareOffPaperPosition}
+              onClearOrders={handleClearAlgoOrders}
+              onInspectChart={(sym, levels) => openChartForSymbol(sym, levels ?? null)}
             />
           )}
 

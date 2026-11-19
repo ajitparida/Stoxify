@@ -32,6 +32,11 @@ import type {
   SymbolAiOutlook,
 } from '../types/market';
 import { formatINR, formatPercent, formatVolume } from '../utils/portfolioAnalytics';
+import {
+  ConfidenceBreakdownBar,
+  EarningsRiskTag,
+  getConfidenceScoreTone,
+} from './ConfidenceBreakdownBar';
 
 export interface ChartOverlayLevels {
   entryLow?: number;
@@ -71,6 +76,9 @@ const RANGES: Array<{ key: ChartRange; label: string }> = [
   { key: '1mo', label: '1M' },
   { key: '6mo', label: '6M' },
   { key: '1y', label: '1Y' },
+  { key: '3y', label: '3Y' },
+  { key: '5y', label: '5Y' },
+  { key: 'max', label: 'All' },
 ];
 
 export function MarketChartTerminal({
@@ -220,6 +228,8 @@ export function MarketChartTerminal({
           guardrailStatus: portfolioRating.guardrailStatus ?? 'PASSED',
           guardrailNote:
             portfolioRating.guardrailNote ?? 'Verified against live quote telemetry.',
+          confidence: portfolioRating.confidence,
+          fundamentals: portfolioRating.fundamentals ?? null,
           benchmarkNifty6M: portfolioAnalysisMeta?.benchmarkNifty6M ?? null,
           analysisSource: portfolioAnalysisMeta?.analysisSource ?? 'gemini',
           quotaNotice: portfolioAnalysisMeta?.quotaNotice,
@@ -245,6 +255,16 @@ export function MarketChartTerminal({
 
   const quote = chartData?.quote;
   const candles = chartData?.candles ?? [];
+  const activeRangeLabel = RANGES.find((r) => r.key === range)?.label ?? range.toUpperCase();
+  const rangeReturnPct =
+    candles.length >= 2 && candles[0].close > 0
+      ? Number(
+          (
+            ((candles[candles.length - 1].close - candles[0].close) / candles[0].close) *
+            100
+          ).toFixed(2)
+        )
+      : null;
   const isPositive = (quote?.change ?? 0) >= 0;
   const strokeColor = isPositive ? '#16A34A' : '#DC2626';
 
@@ -456,21 +476,35 @@ export function MarketChartTerminal({
 
             {/* Chart Controls Toolbar */}
             <div className="flex flex-wrap items-center justify-between gap-4 py-4">
-              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
-                {RANGES.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => setRange(item.key)}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                      range === item.key
-                        ? 'bg-white text-slate-900 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg overflow-x-auto max-w-full">
+                  {RANGES.map((item) => (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setRange(item.key)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                        range === item.key
+                          ? 'bg-white text-slate-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+                {rangeReturnPct !== null && (
+                  <span className="text-xs font-mono-tabular text-slate-500 whitespace-nowrap">
+                    {activeRangeLabel} Change:{' '}
+                    <span
+                      className={`font-semibold ${
+                        rangeReturnPct >= 0 ? 'text-green-700' : 'text-red-700'
+                      }`}
+                    >
+                      {formatPercent(rangeReturnPct)}
+                    </span>
+                  </span>
+                )}
               </div>
 
               <div className="flex flex-wrap items-center gap-4 text-xs">
@@ -840,6 +874,108 @@ export function MarketChartTerminal({
               </div>
             )}
 
+            {/* Calibrated 4-Pillar Confidence Breakdown */}
+            {outlook.confidence && (
+              <div className="pb-4 border-b border-slate-100">
+                <ConfidenceBreakdownBar
+                  confidence={outlook.confidence}
+                  variant="expanded"
+                  showDisclaimer
+                />
+              </div>
+            )}
+
+            {/* Live Fundamentals & Earnings Calendar Strip */}
+            {outlook.fundamentals && outlook.exchange !== 'INDEX' && (
+              <div className="pb-4 border-b border-slate-100 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-900">
+                      Live Fundamentals &amp; Earnings Calendar
+                    </span>
+                    <span className="text-[10px] font-medium text-slate-500">
+                      ({outlook.fundamentals.source === 'live_yahoo'
+                        ? 'Live Yahoo Finance'
+                        : 'Catalog Baseline'})
+                    </span>
+                  </div>
+                  <EarningsRiskTag
+                    nextEarningsDate={outlook.fundamentals.nextEarningsDate}
+                    daysToEarnings={outlook.fundamentals.daysToEarnings}
+                    earningsRiskFlag={outlook.fundamentals.earningsRiskFlag}
+                  />
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+                  <div>
+                    <div className="text-[11px] text-slate-500">Trailing P/E</div>
+                    <div className="font-mono-tabular font-semibold text-slate-900 mt-0.5">
+                      {outlook.fundamentals.trailingPE !== null
+                        ? `${outlook.fundamentals.trailingPE.toFixed(1)}x`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Forward P/E</div>
+                    <div className="font-mono-tabular font-semibold text-slate-900 mt-0.5">
+                      {outlook.fundamentals.forwardPE !== null
+                        ? `${outlook.fundamentals.forwardPE.toFixed(1)}x`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">
+                      {outlook.fundamentals.roePct !== null ? 'ROE' : 'ROCE Proxy'}
+                    </div>
+                    <div className="font-mono-tabular font-semibold text-slate-900 mt-0.5">
+                      {(outlook.fundamentals.roePct ?? outlook.fundamentals.roceProxyPct) !== null
+                        ? `${(
+                            outlook.fundamentals.roePct ??
+                            outlook.fundamentals.roceProxyPct ??
+                            0
+                          ).toFixed(1)}%`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Revenue Growth</div>
+                    <div
+                      className={`font-mono-tabular font-semibold mt-0.5 ${
+                        (outlook.fundamentals.revenueGrowthPct ?? 0) >= 0
+                          ? 'text-green-700'
+                          : 'text-red-700'
+                      }`}
+                    >
+                      {outlook.fundamentals.revenueGrowthPct !== null
+                        ? formatPercent(outlook.fundamentals.revenueGrowthPct)
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Earnings Growth</div>
+                    <div
+                      className={`font-mono-tabular font-semibold mt-0.5 ${
+                        (outlook.fundamentals.earningsGrowthPct ?? 0) >= 0
+                          ? 'text-green-700'
+                          : 'text-red-700'
+                      }`}
+                    >
+                      {outlook.fundamentals.earningsGrowthPct !== null
+                        ? formatPercent(outlook.fundamentals.earningsGrowthPct)
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Debt / Equity</div>
+                    <div className="font-mono-tabular font-semibold text-slate-900 mt-0.5">
+                      {outlook.fundamentals.debtToEquity !== null
+                        ? `${outlook.fundamentals.debtToEquity.toFixed(2)}x`
+                        : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Thesis + Target & Stop-Loss Summary */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="lg:col-span-2 p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-2.5">
@@ -856,9 +992,19 @@ export function MarketChartTerminal({
                     >
                       {outlook.rating}
                     </span>
-                    <span className="text-xs font-medium text-slate-600">
-                      {outlook.conviction} Conviction
-                    </span>
+                    {outlook.confidence ? (
+                      <span
+                        className={`text-xs font-mono-tabular font-bold ${getConfidenceScoreTone(
+                          outlook.confidence.overallScore
+                        )}`}
+                      >
+                        {outlook.confidence.overallScore.toFixed(1)}% Model Confidence
+                      </span>
+                    ) : (
+                      <span className="text-xs font-medium text-slate-600">
+                        {outlook.conviction} Conviction
+                      </span>
+                    )}
                   </div>
                   <div className="text-[11px] font-mono-tabular text-slate-500">
                     {outlook.symbol.replace(/\.(NS|BO)$/, '')} · Live {formatINR(outlook.livePrice)}

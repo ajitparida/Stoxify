@@ -23,6 +23,12 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import type {
+  AlgoOrderDraft,
+  AlgoOrderRecord,
+  AlgoRuleCondition,
+  AlgoStrategyDraft,
+  AlgoStrategyRecord,
+  AlgoStrategyStatus,
   Exchange,
   HoldingRecord,
   HoldingSource,
@@ -582,4 +588,322 @@ export async function batchDeleteMutualFundHoldings(
     }
   }
 }
+
+function clampAlgoNum(val: number, min: number, max: number, decimals = 2): number {
+  if (!Number.isFinite(val)) return min;
+  const clamped = Math.max(min, Math.min(max, val));
+  return Number(clamped.toFixed(decimals));
+}
+
+function sanitizeAlgoConditions(
+  raw: AlgoRuleCondition[],
+  minCount: number
+): AlgoRuleCondition[] {
+  const cleaned = (Array.isArray(raw) ? raw : []).slice(0, 6).map((c, idx) => ({
+    id: sanitizeId(c?.id || `cond_${idx + 1}`),
+    indicator: c?.indicator || 'RSI_14',
+    comparator: c?.comparator || 'LT',
+    threshold: clampAlgoNum(Number(c?.threshold ?? 35), -1000, 1000, 2),
+    label: sanitizeText(c?.label || `${c?.indicator || 'RSI_14'} condition`, 120),
+  }));
+
+  if (cleaned.length < minCount) {
+    cleaned.push({
+      id: 'cond_default_1',
+      indicator: 'RSI_14',
+      comparator: 'LT',
+      threshold: 40,
+      label: 'RSI(14) < 40',
+    });
+  }
+  return cleaned;
+}
+
+function sanitizeAlgoSymbols(raw: string[]): string[] {
+  const list = Array.from(
+    new Set(
+      (Array.isArray(raw) ? raw : [])
+        .map((s) => sanitizeSymbol(String(s || '')))
+        .filter((s) => s.length >= 1 && s.length <= 32)
+    )
+  ).slice(0, 10);
+  return list.length > 0 ? list : ['RELIANCE.NS'];
+}
+
+function buildAlgoStrategyCorePayload(input: AlgoStrategyDraft) {
+  return {
+    name: sanitizeText(input.name, 100, 'Custom Algo Strategy'),
+    prompt: sanitizeText(input.prompt, 500, 'Systematic NSE equity strategy'),
+    summary: sanitizeText(input.summary, 300, 'Rule-based equity strategy with stop-loss and daily cap'),
+    symbols: sanitizeAlgoSymbols(input.symbols),
+    timeframe: (['1d', '5d', '1mo', '6mo', '1y'] as const).includes(input.timeframe)
+      ? input.timeframe
+      : '6mo',
+    logicOperator: input.logicOperator === 'OR' ? 'OR' : 'AND',
+    entryConditions: sanitizeAlgoConditions(input.entryConditions, 1),
+    exitConditions: sanitizeAlgoConditions(input.exitConditions, 0),
+    virtualCapital: clampAlgoNum(input.virtualCapital, 10000, 100000000, 0),
+    allocationPercent: clampAlgoNum(input.allocationPercent, 5, 100, 1),
+    stopLossPct: clampAlgoNum(input.stopLossPct, 0.5, 50, 2),
+    takeProfitPct: clampAlgoNum(input.takeProfitPct, 0.5, 200, 2),
+    trailingStopPct: clampAlgoNum(input.trailingStopPct, 0, 50, 2),
+    maxOpenPositions: Math.round(clampAlgoNum(input.maxOpenPositions, 1, 20, 0)),
+    dailyLossCapPct: clampAlgoNum(input.dailyLossCapPct, 0.5, 25, 2),
+    slippageBps: clampAlgoNum(input.slippageBps, 0, 100, 1),
+  };
+}
+
+export function subscribeAlgoStrategies(
+  userId: string,
+  onData: (items: AlgoStrategyRecord[]) => void,
+  onError: (err: Error) => void
+): Unsubscribe {
+  const path = `users/${userId}/algoStrategies`;
+  const q = query(collection(db, 'users', userId, 'algoStrategies'), where('userId', '==', userId));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: AlgoStrategyRecord[] = snapshot.docs.map(
+        (d) => d.data() as AlgoStrategyRecord
+      );
+      onData(items);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch (wrapped) {
+        onError(wrapped as Error);
+      }
+    }
+  );
+}
+
+export async function createAlgoStrategy(
+  userId: string,
+  input: AlgoStrategyDraft & {
+    id?: string;
+    status?: AlgoStrategyStatus;
+    lastBacktestReturnPct?: number;
+    lastBacktestSharpe?: number;
+    lastBacktestMaxDrawdownPct?: number;
+    lastBacktestWinRatePct?: number;
+  }
+): Promise<string> {
+  const strategyId = sanitizeId(
+    input.id || `algo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+  );
+  const path = `users/${userId}/algoStrategies/${strategyId}`;
+  const core = buildAlgoStrategyCorePayload(input);
+  const status: AlgoStrategyStatus = (
+    ['DRAFT', 'ACTIVE', 'PAUSED', 'PAUSED_RISK_CAP'] as const
+  ).includes(input.status ?? 'DRAFT')
+    ? (input.status ?? 'DRAFT')
+    : 'DRAFT';
+
+  const payload: Record<string, unknown> = {
+    id: strategyId,
+    userId,
+    ...core,
+    status,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (typeof input.lastBacktestReturnPct === 'number' && Number.isFinite(input.lastBacktestReturnPct)) {
+    payload.lastBacktestReturnPct = clampAlgoNum(input.lastBacktestReturnPct, -100, 10000, 2);
+  }
+  if (typeof input.lastBacktestSharpe === 'number' && Number.isFinite(input.lastBacktestSharpe)) {
+    payload.lastBacktestSharpe = clampAlgoNum(input.lastBacktestSharpe, -20, 50, 2);
+  }
+  if (
+    typeof input.lastBacktestMaxDrawdownPct === 'number' &&
+    Number.isFinite(input.lastBacktestMaxDrawdownPct)
+  ) {
+    payload.lastBacktestMaxDrawdownPct = clampAlgoNum(input.lastBacktestMaxDrawdownPct, 0, 100, 2);
+  }
+  if (
+    typeof input.lastBacktestWinRatePct === 'number' &&
+    Number.isFinite(input.lastBacktestWinRatePct)
+  ) {
+    payload.lastBacktestWinRatePct = clampAlgoNum(input.lastBacktestWinRatePct, 0, 100, 2);
+  }
+
+  try {
+    await setDoc(doc(db, 'users', userId, 'algoStrategies', strategyId), payload);
+    return strategyId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateAlgoStrategy(
+  userId: string,
+  strategyId: string,
+  patch: AlgoStrategyDraft & {
+    status: AlgoStrategyStatus;
+    lastBacktestReturnPct?: number;
+    lastBacktestSharpe?: number;
+    lastBacktestMaxDrawdownPct?: number;
+    lastBacktestWinRatePct?: number;
+  }
+): Promise<void> {
+  const path = `users/${userId}/algoStrategies/${strategyId}`;
+  const core = buildAlgoStrategyCorePayload(patch);
+  const status: AlgoStrategyStatus = (
+    ['DRAFT', 'ACTIVE', 'PAUSED', 'PAUSED_RISK_CAP'] as const
+  ).includes(patch.status)
+    ? patch.status
+    : 'DRAFT';
+
+  const payload: Record<string, unknown> = {
+    ...core,
+    status,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (typeof patch.lastBacktestReturnPct === 'number' && Number.isFinite(patch.lastBacktestReturnPct)) {
+    payload.lastBacktestReturnPct = clampAlgoNum(patch.lastBacktestReturnPct, -100, 10000, 2);
+  }
+  if (typeof patch.lastBacktestSharpe === 'number' && Number.isFinite(patch.lastBacktestSharpe)) {
+    payload.lastBacktestSharpe = clampAlgoNum(patch.lastBacktestSharpe, -20, 50, 2);
+  }
+  if (
+    typeof patch.lastBacktestMaxDrawdownPct === 'number' &&
+    Number.isFinite(patch.lastBacktestMaxDrawdownPct)
+  ) {
+    payload.lastBacktestMaxDrawdownPct = clampAlgoNum(patch.lastBacktestMaxDrawdownPct, 0, 100, 2);
+  }
+  if (
+    typeof patch.lastBacktestWinRatePct === 'number' &&
+    Number.isFinite(patch.lastBacktestWinRatePct)
+  ) {
+    payload.lastBacktestWinRatePct = clampAlgoNum(patch.lastBacktestWinRatePct, 0, 100, 2);
+  }
+
+  try {
+    await updateDoc(doc(db, 'users', userId, 'algoStrategies', strategyId), payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateAlgoStrategyStatus(
+  userId: string,
+  strategyId: string,
+  status: AlgoStrategyStatus
+): Promise<void> {
+  const path = `users/${userId}/algoStrategies/${strategyId}`;
+  try {
+    await updateDoc(doc(db, 'users', userId, 'algoStrategies', strategyId), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteAlgoStrategy(userId: string, strategyId: string): Promise<void> {
+  const path = `users/${userId}/algoStrategies/${strategyId}`;
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'algoStrategies', strategyId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeAlgoOrders(
+  userId: string,
+  onData: (items: AlgoOrderRecord[]) => void,
+  onError: (err: Error) => void
+): Unsubscribe {
+  const path = `users/${userId}/algoOrders`;
+  const q = query(collection(db, 'users', userId, 'algoOrders'), where('userId', '==', userId));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: AlgoOrderRecord[] = snapshot.docs
+        .map((d) => d.data() as AlgoOrderRecord)
+        .sort((a, b) => (b.executedAtIso || '').localeCompare(a.executedAtIso || ''));
+      onData(items);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch (wrapped) {
+        onError(wrapped as Error);
+      }
+    }
+  );
+}
+
+export async function batchCreateAlgoOrders(
+  userId: string,
+  orders: AlgoOrderDraft[]
+): Promise<void> {
+  if (orders.length === 0) return;
+  const path = `users/${userId}/algoOrders`;
+  const nowStamp = Date.now();
+
+  for (let i = 0; i < orders.length; i += 400) {
+    const chunk = orders.slice(i, i + 400);
+    const batch = writeBatch(db);
+    chunk.forEach((order, idx) => {
+      const orderId = sanitizeId(
+        `ord_${sanitizeSymbol(order.symbol).replace(/\./g, '_')}_${nowStamp}_${i + idx}_${Math.random()
+          .toString(36)
+          .slice(2, 5)}`
+      );
+      const ref = doc(db, 'users', userId, 'algoOrders', orderId);
+      batch.set(ref, {
+        id: orderId,
+        userId,
+        strategyId: sanitizeId(order.strategyId),
+        strategyName: sanitizeText(order.strategyName, 100, 'Algo Strategy'),
+        symbol: sanitizeSymbol(order.symbol),
+        side: order.side === 'SELL' ? 'SELL' : 'BUY',
+        status: (
+          ['FILLED', 'BLOCKED_RISK_CAP', 'BLOCKED_FUNDS', 'CANCELLED'] as const
+        ).includes(order.status)
+          ? order.status
+          : 'FILLED',
+        quantity: Math.round(clampAlgoNum(order.quantity, 0, 10000000, 0)),
+        price: clampAlgoNum(order.price, 0.01, 10000000, 2),
+        notionalValue: clampAlgoNum(order.notionalValue, 0, 1000000000, 2),
+        realizedPnl: clampAlgoNum(order.realizedPnl, -1000000000, 1000000000, 2),
+        triggerReason: sanitizeText(order.triggerReason, 240, 'Algorithmic signal trigger'),
+        executedAtIso: sanitizeText(order.executedAtIso || new Date().toISOString(), 40),
+        tradingDate: sanitizeDate(order.tradingDate),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    });
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, path);
+    }
+  }
+}
+
+export async function batchDeleteAlgoOrders(userId: string, orderIds: string[]): Promise<void> {
+  if (orderIds.length === 0) return;
+  const path = `users/${userId}/algoOrders`;
+  for (let i = 0; i < orderIds.length; i += 400) {
+    const chunk = orderIds.slice(i, i + 400);
+    const batch = writeBatch(db);
+    for (const id of chunk) {
+      batch.delete(doc(db, 'users', userId, 'algoOrders', id));
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  }
+}
+
 

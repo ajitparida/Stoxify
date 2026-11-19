@@ -38,7 +38,7 @@ for (const item of [...INDIAN_INDICES, ...INDIAN_STOCK_UNIVERSE]) {
   CATALOG_BY_SYMBOL.set(item.symbol.toUpperCase(), item);
 }
 
-function findCatalogEntry(symbol: string): CatalogStock | undefined {
+export function findCatalogEntry(symbol: string): CatalogStock | undefined {
   const upper = symbol.toUpperCase();
   if (CATALOG_BY_SYMBOL.has(upper)) return CATALOG_BY_SYMBOL.get(upper);
   const tickerOnly = upper.replace(/\.(NS|BO)$/, '');
@@ -317,6 +317,7 @@ function buildQuoteFromDailyResult(
     sma200: computeSMA(validCloses, 200),
     rsi14: computeRSI14(validCloses),
     return1M: pctReturn(validCloses, 21),
+    return3M: pctReturn(validCloses, 63),
     return6M: pctReturn(validCloses, 126),
     return1Y: pctReturn(validCloses, Math.min(250, validCloses.length - 1)),
     peRatio: catalog?.peRatio ?? null,
@@ -410,11 +411,18 @@ function formatDateLabel(tsSec: number, range: ChartRange): string {
       hour12: false,
     });
   }
+  if (range === 'max') {
+    return d.toLocaleDateString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      month: 'short',
+      year: 'numeric',
+    });
+  }
   return d.toLocaleDateString('en-IN', {
     timeZone: 'Asia/Kolkata',
     day: 'numeric',
     month: 'short',
-    year: range === '1y' ? '2-digit' : undefined,
+    year: range === '1y' || range === '3y' || range === '5y' ? '2-digit' : undefined,
   });
 }
 
@@ -435,6 +443,9 @@ export async function getChart(
     '1mo': '1d',
     '6mo': '1d',
     '1y': '1d',
+    '3y': '1d',
+    '5y': '1wk',
+    max: '1mo',
   };
 
   const [rawRange, quote] = await Promise.all([
@@ -501,6 +512,67 @@ export async function getChart(
   });
 
   return response;
+}
+
+export interface RawOhlcvBar {
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+const rawOhlcvCache = new Map<string, CacheEntry<RawOhlcvBar[]>>();
+
+export async function getRawOhlcvCandles(
+  symbol: string,
+  range: string,
+  interval: string
+): Promise<RawOhlcvBar[]> {
+  const normalized = symbol.trim().toUpperCase();
+  const cacheKey = `${normalized}:${range}:${interval}`;
+  const cached = rawOhlcvCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  const rawRange = await fetchYahooChartRaw(normalized, range, interval);
+  if (!rawRange) {
+    return cached ? cached.data : [];
+  }
+
+  const timestamps = rawRange.timestamp ?? [];
+  const q = rawRange.indicators?.quote?.[0];
+  const opens = q?.open ?? [];
+  const highs = q?.high ?? [];
+  const lows = q?.low ?? [];
+  const closes = q?.close ?? [];
+  const volumes = q?.volume ?? [];
+
+  const bars: RawOhlcvBar[] = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    const c = closes[i];
+    if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+      bars.push({
+        timestamp: timestamps[i],
+        open: Number(((opens[i] ?? c) as number).toFixed(2)),
+        high: Number(((highs[i] ?? c) as number).toFixed(2)),
+        low: Number(((lows[i] ?? c) as number).toFixed(2)),
+        close: Number(c.toFixed(2)),
+        volume:
+          typeof volumes[i] === 'number' && Number.isFinite(volumes[i])
+            ? (volumes[i] as number)
+            : 0,
+      });
+    }
+  }
+
+  rawOhlcvCache.set(cacheKey, {
+    data: bars,
+    expiresAt: Date.now() + CHART_TTL_MS,
+  });
+  return bars;
 }
 
 export async function searchIndianStocks(queryText: string): Promise<SearchResultItem[]> {

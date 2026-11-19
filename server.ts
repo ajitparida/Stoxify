@@ -3,11 +3,14 @@ import path from 'path';
 import dotenv from 'dotenv';
 import {
   getChart,
-  getLiveResearchSignals,
   getQuotes,
-  getScreenerUniverse,
   searchIndianStocks,
 } from './server/marketService.ts';
+import {
+  getEnrichedResearchSignals,
+  getEnrichedScreenerUniverse,
+  getPatternDiscoveryHub,
+} from './server/confidenceEngineService.ts';
 import { parsePortfolioScreenshots, type ScreenshotInput } from './server/screenshotParser.ts';
 import {
   analyzePortfolioHoldings,
@@ -28,7 +31,15 @@ import {
   generateCapitalRotation,
   getAiStrategyBaskets,
 } from './server/capitalRotationService.ts';
+import {
+  compileAlgoStrategyFromPrompt,
+  evaluateLivePaperStrategies,
+  runHistoricalBacktest,
+} from './server/algoEngineService.ts';
 import type {
+  AlgoOrderRecord,
+  AlgoStrategyDraft,
+  AlgoStrategyRecord,
   AnalyzedMutualFund,
   ChartRange,
   MutualFundHoldingRecord,
@@ -38,7 +49,7 @@ import type {
 dotenv.config();
 
 const PORT = Number(process.env.PORT) || 3000;
-const VALID_RANGES = new Set<ChartRange>(['1d', '5d', '1mo', '6mo', '1y']);
+const VALID_RANGES = new Set<ChartRange>(['1d', '5d', '1mo', '6mo', '1y', '3y', '5y', 'max']);
 
 function formatRouteError(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
@@ -109,7 +120,7 @@ async function startServer() {
 
   app.get('/api/market/screener', async (_req, res) => {
     try {
-      const stocks = await getScreenerUniverse();
+      const stocks = await getEnrichedScreenerUniverse();
       res.json({ stocks, fetchedAt: new Date().toISOString() });
     } catch (error) {
       console.error('Screener endpoint error:', error);
@@ -117,9 +128,20 @@ async function startServer() {
     }
   });
 
+  app.get('/api/market/patterns', async (req, res) => {
+    try {
+      const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+      const data = await getPatternDiscoveryHub(forceRefresh);
+      res.json(data);
+    } catch (error) {
+      console.error('Patterns discovery endpoint error:', error);
+      res.status(500).json({ error: 'Failed to compute pattern discovery & walk-forward stats.' });
+    }
+  });
+
   app.get('/api/market/signals', async (_req, res) => {
     try {
-      const signals = await getLiveResearchSignals();
+      const signals = await getEnrichedResearchSignals();
       res.json({ signals, fetchedAt: new Date().toISOString() });
     } catch (error) {
       console.error('Signals endpoint error:', error);
@@ -157,6 +179,76 @@ async function startServer() {
       console.error('AI strategies endpoint error:', error);
       res.status(500).json({
         error: formatRouteError(error, 'Failed to load AI stock strategies.'),
+      });
+    }
+  });
+
+  app.post('/api/algo/compile', async (req, res) => {
+    try {
+      const body = req.body as { prompt?: string };
+      const prompt = typeof body?.prompt === 'string' ? body.prompt.trim() : '';
+      if (prompt.length < 6) {
+        res.status(400).json({
+          error: 'Describe your trading rules in plain English (e.g. RSI, moving averages, stop-loss, and target).',
+        });
+        return;
+      }
+
+      const compiled = await compileAlgoStrategyFromPrompt(prompt);
+      res.json(compiled);
+    } catch (error) {
+      console.error('Algo compile endpoint error:', error);
+      res.status(500).json({
+        error: formatRouteError(error, 'Failed to compile algorithmic strategy rules.'),
+      });
+    }
+  });
+
+  app.post('/api/algo/backtest', async (req, res) => {
+    try {
+      const body = req.body as { strategy?: AlgoStrategyDraft };
+      if (!body?.strategy || !Array.isArray(body.strategy.symbols) || body.strategy.symbols.length === 0) {
+        res.status(400).json({
+          error: 'Strategy parameters and at least one target NSE/BSE symbol are required.',
+        });
+        return;
+      }
+
+      const result = await runHistoricalBacktest(body.strategy);
+      res.json(result);
+    } catch (error) {
+      console.error('Algo backtest endpoint error:', error);
+      const message = error instanceof Error ? error.message : 'Failed to run historical backtest.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  app.post('/api/algo/paper-evaluate', async (req, res) => {
+    try {
+      const body = req.body as {
+        strategies?: AlgoStrategyRecord[];
+        orders?: AlgoOrderRecord[];
+      };
+      const strategies = Array.isArray(body?.strategies) ? body.strategies.slice(0, 50) : [];
+      const orders = Array.isArray(body?.orders) ? body.orders.slice(0, 500) : [];
+
+      if (strategies.length === 0) {
+        res.json({
+          newOrders: [],
+          strategyStatusUpdates: [],
+          openPositions: [],
+          strategyTelemetry: [],
+          evaluatedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const evaluation = await evaluateLivePaperStrategies(strategies, orders);
+      res.json(evaluation);
+    } catch (error) {
+      console.error('Algo paper-evaluate endpoint error:', error);
+      res.status(500).json({
+        error: formatRouteError(error, 'Failed to evaluate live paper-trading strategies.'),
       });
     }
   });

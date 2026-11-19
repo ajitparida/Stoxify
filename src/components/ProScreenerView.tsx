@@ -1,8 +1,20 @@
-import { useEffect, useMemo, useState } from 'react';
-import { LineChart, RefreshCw, RotateCcw, Search, Star } from 'lucide-react';
-import type { Exchange, MarketQuote, ScreenerPreset } from '../types/market';
+import { Fragment, useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ChevronUp, LineChart, RefreshCw, RotateCcw, Search, Star } from 'lucide-react';
+import type {
+  Exchange,
+  MarketQuote,
+  PatternDiscoveryResponse,
+  PatternId,
+  ScreenerPreset,
+} from '../types/market';
 import { formatINR, formatPercent, formatVolume } from '../utils/portfolioAnalytics';
 import { SortableTh } from './SortableTh';
+import {
+  ConfidenceBreakdownBar,
+  EarningsRiskTag,
+  getConfidenceScoreTone,
+} from './ConfidenceBreakdownBar';
+import { PatternDiscoveryHub } from './PatternDiscoveryHub';
 
 interface ProScreenerViewProps {
   onInspectChart: (symbol: string) => void;
@@ -19,7 +31,15 @@ const PRESETS: Array<{ key: ScreenerPreset; label: string; hint: string }> = [
   { key: 'top_gainers', label: 'Today Gainers', hint: 'Positive daily momentum leaders' },
 ];
 
-type SortField = 'ticker' | 'price' | 'changePercent' | 'rsi14' | 'volumeRatio' | 'peRatio' | 'return6M';
+type SortField =
+  | 'ticker'
+  | 'confidence'
+  | 'price'
+  | 'changePercent'
+  | 'rsi14'
+  | 'volumeRatio'
+  | 'peRatio'
+  | 'return6M';
 
 export function ProScreenerView({
   onInspectChart,
@@ -30,32 +50,47 @@ export function ProScreenerView({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [patternHub, setPatternHub] = useState<PatternDiscoveryResponse | null>(null);
+  const [patternsLoading, setPatternsLoading] = useState(true);
+  const [activePatternId, setActivePatternId] = useState<PatternId | null>(null);
+  const [expandedSymbol, setExpandedSymbol] = useState<string | null>(null);
+
   const [preset, setPreset] = useState<ScreenerPreset>('all');
   const [searchText, setSearchText] = useState('');
   const [sectorFilter, setSectorFilter] = useState('All');
   const [capFilter, setCapFilter] = useState('All');
   const [rsiFilter, setRsiFilter] = useState<'All' | 'oversold' | 'neutral' | 'overbought'>('All');
   const [peFilter, setPeFilter] = useState<'All' | 'value' | 'moderate' | 'premium'>('All');
-  const [sortField, setSortField] = useState<SortField>('changePercent');
+  const [sortField, setSortField] = useState<SortField>('confidence');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
-  const fetchScreener = async () => {
+  const fetchScreener = async (forceRefreshPatterns = false) => {
     setLoading(true);
+    setPatternsLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/market/screener');
-      if (!res.ok) throw new Error('Failed to load live NSE/BSE screener universe.');
-      const data = (await res.json()) as { stocks: MarketQuote[] };
+      const [screenerRes, patternsRes] = await Promise.all([
+        fetch('/api/market/screener'),
+        fetch(`/api/market/patterns${forceRefreshPatterns ? '?refresh=1' : ''}`),
+      ]);
+      if (!screenerRes.ok) throw new Error('Failed to load live NSE/BSE screener universe.');
+      const data = (await screenerRes.json()) as { stocks: MarketQuote[] };
       setStocks(data.stocks || []);
+
+      if (patternsRes.ok) {
+        const patData = (await patternsRes.json()) as PatternDiscoveryResponse;
+        setPatternHub(patData);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to fetch screener data.');
     } finally {
       setLoading(false);
+      setPatternsLoading(false);
     }
   };
 
   useEffect(() => {
-    void fetchScreener();
+    void fetchScreener(false);
   }, []);
 
   const sectors = useMemo(() => {
@@ -70,6 +105,7 @@ export function ProScreenerView({
 
   const hasActiveFilters =
     preset !== 'all' ||
+    activePatternId !== null ||
     searchText.trim() !== '' ||
     sectorFilter !== 'All' ||
     capFilter !== 'All' ||
@@ -78,6 +114,7 @@ export function ProScreenerView({
 
   const resetFilters = () => {
     setPreset('all');
+    setActivePatternId(null);
     setSearchText('');
     setSectorFilter('All');
     setCapFilter('All');
@@ -95,6 +132,12 @@ export function ProScreenerView({
         }
         if (sectorFilter !== 'All' && s.sector !== sectorFilter) return false;
         if (capFilter !== 'All' && s.capCategory !== capFilter) return false;
+        if (
+          activePatternId &&
+          !(s.confidence?.matchedPatterns ?? []).includes(activePatternId)
+        ) {
+          return false;
+        }
 
         if (rsiFilter !== 'All') {
           if (s.rsi14 === null) return false;
@@ -130,6 +173,11 @@ export function ProScreenerView({
           const cmp = a.ticker.localeCompare(b.ticker);
           return sortDir === 'asc' ? cmp : -cmp;
         }
+        if (sortField === 'confidence') {
+          const av = a.confidence?.overallScore ?? -1;
+          const bv = b.confidence?.overallScore ?? -1;
+          return sortDir === 'asc' ? av - bv : bv - av;
+        }
         const av = a[sortField];
         const bv = b[sortField];
         if (av === null && bv === null) return 0;
@@ -137,7 +185,18 @@ export function ProScreenerView({
         if (bv === null) return -1;
         return sortDir === 'asc' ? Number(av) - Number(bv) : Number(bv) - Number(av);
       });
-  }, [stocks, searchText, sectorFilter, capFilter, rsiFilter, peFilter, preset, sortField, sortDir]);
+  }, [
+    stocks,
+    searchText,
+    sectorFilter,
+    capFilter,
+    activePatternId,
+    rsiFilter,
+    peFilter,
+    preset,
+    sortField,
+    sortDir,
+  ]);
 
   const toggleSort = (field: SortField) => {
     if (sortField === field) {
@@ -152,16 +211,29 @@ export function ProScreenerView({
 
   return (
     <div className="space-y-5">
+      {/* Illustrated 6-Pattern Discovery Hub with Walk-Forward 1M/3M Stats */}
+      <PatternDiscoveryHub
+        data={patternHub}
+        loading={patternsLoading}
+        activePatternId={activePatternId}
+        onSelectPatternFilter={setActivePatternId}
+        onInspectChart={onInspectChart}
+        onToggleWatchlist={onToggleWatchlist}
+        isInWatchlist={isInWatchlist}
+      />
+
       {/* Preset Bar */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-slate-900">Stoxify Pro Stock Screener</h2>
-            <p className="text-xs text-slate-500 mt-0.5">{activePresetHint}</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {activePresetHint} · Live Yahoo Finance fundamentals &amp; calibrated 4-pillar Confidence Score
+            </p>
           </div>
           <button
             type="button"
-            onClick={() => void fetchScreener()}
+            onClick={() => void fetchScreener(true)}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 whitespace-nowrap shrink-0"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -286,6 +358,14 @@ export function ProScreenerView({
                     onSort={toggleSort}
                   />
                   <SortableTh
+                    label="Confidence"
+                    sortKey="confidence"
+                    activeKey={sortField}
+                    direction={sortDir}
+                    align="right"
+                    onSort={toggleSort}
+                  />
+                  <SortableTh
                     label="LTP"
                     sortKey="price"
                     activeKey={sortField}
@@ -319,7 +399,7 @@ export function ProScreenerView({
                     onSort={toggleSort}
                   />
                   <SortableTh
-                    label="P/E · ROCE"
+                    label="Live P/E · ROE"
                     sortKey="peRatio"
                     activeKey={sortField}
                     direction={sortDir}
@@ -341,14 +421,14 @@ export function ProScreenerView({
                 {loading && stocks.length === 0 ? (
                   Array.from({ length: 8 }).map((_, i) => (
                     <tr key={i} className="h-11 animate-pulse">
-                      <td colSpan={9} className="px-4 py-2 bg-slate-50/40" />
+                      <td colSpan={10} className="px-4 py-2 bg-slate-50/40" />
                     </tr>
                   ))
                 ) : filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-12 px-4 text-center space-y-2">
+                    <td colSpan={10} className="py-12 px-4 text-center space-y-2">
                       <div className="text-slate-600 font-medium">
-                        No stocks match the selected technical &amp; fundamental filters.
+                        No stocks match the selected technical, pattern, or fundamental filters.
                       </div>
                       <button
                         type="button"
@@ -363,108 +443,216 @@ export function ProScreenerView({
                   filtered.map((s, idx) => {
                     const pos = s.changePercent >= 0;
                     const bullishDma = s.sma50 && s.sma200 && s.sma50 > s.sma200;
+                    const isExpanded = expandedSymbol === s.symbol;
+                    const confScore = s.confidence?.overallScore ?? null;
+                    const returnQuality = s.roePct ?? s.roce;
+
                     return (
-                      <tr
-                        key={`${s.symbol}_${idx}`}
-                        onClick={() => onInspectChart(s.symbol)}
-                        className="hover:bg-slate-50 cursor-pointer"
-                      >
-                        <td className="py-2.5 px-4">
-                          <div className="font-semibold text-slate-900">{s.ticker}</div>
-                          <div className="text-[11px] text-slate-500 truncate max-w-[200px]">
-                            {s.exchange} · {s.sector} · {s.capCategory}
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono-tabular font-semibold text-slate-900">
-                          {formatINR(s.price)}
-                        </td>
-                        <td
-                          className={`py-2.5 px-3 text-right font-mono-tabular font-semibold ${
-                            pos ? 'text-green-700' : 'text-red-700'
-                          }`}
+                      <Fragment key={`${s.symbol}_${idx}`}>
+                        <tr
+                          onClick={() => onInspectChart(s.symbol)}
+                          className="hover:bg-slate-50 cursor-pointer"
                         >
-                          {formatPercent(s.changePercent)}
-                        </td>
-                        <td
-                          className={`py-2.5 px-3 text-right font-mono-tabular ${
-                            (s.rsi14 ?? 50) < 38
-                              ? 'text-green-700 font-semibold'
-                              : (s.rsi14 ?? 50) > 70
-                              ? 'text-red-700 font-semibold'
-                              : 'text-slate-700'
-                          }`}
-                        >
-                          {s.rsi14 !== null ? s.rsi14.toFixed(1) : '—'}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono-tabular">
-                          <span className={bullishDma ? 'text-green-700 font-medium' : 'text-slate-600'}>
-                            {bullishDma ? 'Golden' : 'Neutral'}
-                          </span>
-                          <div className="text-[10px] text-slate-400">
-                            {s.sma50 ? `₹${Math.round(s.sma50)}` : '—'} /{' '}
-                            {s.sma200 ? `₹${Math.round(s.sma200)}` : '—'}
-                          </div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono-tabular">
-                          <span
-                            className={
-                              s.volumeRatio >= 1.3 ? 'text-blue-700 font-semibold' : 'text-slate-700'
-                            }
-                          >
-                            {s.volumeRatio.toFixed(2)}x
-                          </span>
-                          <div className="text-[10px] text-slate-400">{formatVolume(s.volume)}</div>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono-tabular text-slate-700">
-                          <div>{s.peRatio ? `${s.peRatio.toFixed(1)}x` : '—'}</div>
-                          <div className="text-[10px] text-slate-400">
-                            ROCE {s.roce !== null ? `${s.roce.toFixed(1)}%` : '—'}
-                          </div>
-                        </td>
-                        <td
-                          className={`py-2.5 px-3 text-right font-mono-tabular font-semibold ${
-                            (s.return6M ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'
-                          }`}
-                        >
-                          {formatPercent(s.return6M)}
-                        </td>
-                        <td
-                          className="py-2.5 px-4 text-right whitespace-nowrap"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="inline-flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => onInspectChart(s.symbol)}
-                              className="p-1.5 text-slate-500 hover:text-blue-700 rounded hover:bg-blue-50"
-                              title="Open chart"
-                            >
-                              <LineChart className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                onToggleWatchlist(
-                                  s.symbol,
-                                  s.shortName,
-                                  s.exchange === 'BSE' ? 'BSE' : 'NSE',
-                                  s.sector
-                                )
-                              }
-                              className="p-1.5 text-slate-500 hover:text-amber-600 rounded hover:bg-amber-50"
-                              title="Toggle watchlist"
-                            >
-                              <Star
-                                className={`w-3.5 h-3.5 ${
-                                  isInWatchlist(s.symbol)
-                                    ? 'fill-amber-500 text-amber-500'
-                                    : ''
-                                }`}
+                          <td className="py-2.5 px-4">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-semibold text-slate-900">{s.ticker}</span>
+                              <EarningsRiskTag
+                                nextEarningsDate={s.nextEarningsDate}
+                                daysToEarnings={s.daysToEarnings}
+                                earningsRiskFlag={s.earningsRiskFlag}
+                                compact
                               />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate max-w-[210px]">
+                              {s.exchange} · {s.sector} · {s.capCategory}
+                            </div>
+                          </td>
+                          <td
+                            className="py-2.5 px-3 text-right"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpandedSymbol(isExpanded ? null : s.symbol);
+                            }}
+                          >
+                            {confScore !== null ? (
+                              <button
+                                type="button"
+                                className="inline-flex items-center gap-1 text-right hover:underline"
+                                title="Click to inspect 4-pillar Confidence breakdown"
+                              >
+                                <span
+                                  className={`font-mono-tabular font-bold ${getConfidenceScoreTone(
+                                    confScore
+                                  )}`}
+                                >
+                                  {confScore.toFixed(1)}%
+                                </span>
+                                {isExpanded ? (
+                                  <ChevronUp className="w-3 h-3 text-slate-400" />
+                                ) : (
+                                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                                )}
+                              </button>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono-tabular font-semibold text-slate-900">
+                            {formatINR(s.price)}
+                          </td>
+                          <td
+                            className={`py-2.5 px-3 text-right font-mono-tabular font-semibold ${
+                              pos ? 'text-green-700' : 'text-red-700'
+                            }`}
+                          >
+                            {formatPercent(s.changePercent)}
+                          </td>
+                          <td
+                            className={`py-2.5 px-3 text-right font-mono-tabular ${
+                              (s.rsi14 ?? 50) < 38
+                                ? 'text-green-700 font-semibold'
+                                : (s.rsi14 ?? 50) > 70
+                                ? 'text-red-700 font-semibold'
+                                : 'text-slate-700'
+                            }`}
+                          >
+                            {s.rsi14 !== null ? s.rsi14.toFixed(1) : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono-tabular">
+                            <span
+                              className={bullishDma ? 'text-green-700 font-medium' : 'text-slate-600'}
+                            >
+                              {bullishDma ? 'Golden' : 'Neutral'}
+                            </span>
+                            <div className="text-[10px] text-slate-400">
+                              {s.sma50 ? `₹${Math.round(s.sma50)}` : '—'} /{' '}
+                              {s.sma200 ? `₹${Math.round(s.sma200)}` : '—'}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono-tabular">
+                            <span
+                              className={
+                                s.volumeRatio >= 1.3
+                                  ? 'text-blue-700 font-semibold'
+                                  : 'text-slate-700'
+                              }
+                            >
+                              {s.volumeRatio.toFixed(2)}x
+                            </span>
+                            <div className="text-[10px] text-slate-400">
+                              {formatVolume(s.volume)}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono-tabular text-slate-700">
+                            <div>
+                              {s.peRatio ? `${s.peRatio.toFixed(1)}x` : '—'}
+                              {s.fundamentalsSource === 'live_yahoo' && (
+                                <span
+                                  className="text-[9px] text-emerald-700 ml-1 font-sans font-semibold"
+                                  title="Live Yahoo Finance fundamentals"
+                                >
+                                  LIVE
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {s.roePct !== null && s.roePct !== undefined ? 'ROE' : 'ROCE'}{' '}
+                              {returnQuality !== null ? `${returnQuality.toFixed(1)}%` : '—'}
+                            </div>
+                          </td>
+                          <td
+                            className={`py-2.5 px-3 text-right font-mono-tabular font-semibold ${
+                              (s.return6M ?? 0) >= 0 ? 'text-green-700' : 'text-red-700'
+                            }`}
+                          >
+                            {formatPercent(s.return6M)}
+                          </td>
+                          <td
+                            className="py-2.5 px-4 text-right whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => onInspectChart(s.symbol)}
+                                className="p-1.5 text-slate-500 hover:text-blue-700 rounded hover:bg-blue-50"
+                                title="Open chart"
+                              >
+                                <LineChart className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  onToggleWatchlist(
+                                    s.symbol,
+                                    s.shortName,
+                                    s.exchange === 'BSE' ? 'BSE' : 'NSE',
+                                    s.sector
+                                  )
+                                }
+                                className="p-1.5 text-slate-500 hover:text-amber-600 rounded hover:bg-amber-50"
+                                title="Toggle watchlist"
+                              >
+                                <Star
+                                  className={`w-3.5 h-3.5 ${
+                                    isInWatchlist(s.symbol)
+                                      ? 'fill-amber-500 text-amber-500'
+                                      : ''
+                                  }`}
+                                />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                        {isExpanded && s.confidence && (
+                          <tr className="bg-slate-50/70">
+                            <td colSpan={10} className="px-5 py-4 space-y-3">
+                              <ConfidenceBreakdownBar
+                                confidence={s.confidence}
+                                variant="expanded"
+                              />
+                              <div className="flex flex-wrap items-center gap-x-6 gap-y-1.5 pt-2 border-t border-slate-200 text-[11px] font-mono-tabular text-slate-600">
+                                <span>
+                                  Fwd P/E:{' '}
+                                  <strong className="text-slate-900">
+                                    {s.forwardPE ? `${s.forwardPE.toFixed(1)}x` : '—'}
+                                  </strong>
+                                </span>
+                                <span>
+                                  Rev Growth:{' '}
+                                  <strong className="text-slate-900">
+                                    {s.revenueGrowthPct !== null && s.revenueGrowthPct !== undefined
+                                      ? formatPercent(s.revenueGrowthPct)
+                                      : '—'}
+                                  </strong>
+                                </span>
+                                <span>
+                                  EPS Growth:{' '}
+                                  <strong className="text-slate-900">
+                                    {s.earningsGrowthPct !== null &&
+                                    s.earningsGrowthPct !== undefined
+                                      ? formatPercent(s.earningsGrowthPct)
+                                      : '—'}
+                                  </strong>
+                                </span>
+                                <span>
+                                  D/E:{' '}
+                                  <strong className="text-slate-900">
+                                    {s.debtToEquity !== null ? `${s.debtToEquity.toFixed(2)}x` : '—'}
+                                  </strong>
+                                </span>
+                                {s.nextEarningsDate && (
+                                  <EarningsRiskTag
+                                    nextEarningsDate={s.nextEarningsDate}
+                                    daysToEarnings={s.daysToEarnings}
+                                    earningsRiskFlag={s.earningsRiskFlag}
+                                  />
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     );
                   })
                 )}

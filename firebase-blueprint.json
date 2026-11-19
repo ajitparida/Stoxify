@@ -221,6 +221,216 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "AlgoStrategy": {
+      "title": "AlgoStrategy",
+      "description": "A user-defined or AI-compiled algorithmic paper trading strategy with risk guardrails",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "symbols": {
+          "type": "array",
+          "description": "Target NSE/BSE equity symbols (1 to 10)"
+        },
+        "timeframe": {
+          "type": "string",
+          "enum": ["1d", "5d", "1mo", "6mo", "1y"]
+        },
+        "logicOperator": {
+          "type": "string",
+          "enum": ["AND", "OR"]
+        },
+        "entryConditions": {
+          "type": "array",
+          "description": "Compiled entry predicates (1 to 6)"
+        },
+        "exitConditions": {
+          "type": "array",
+          "description": "Compiled technical exit predicates (0 to 6)"
+        },
+        "virtualCapital": {
+          "type": "number"
+        },
+        "allocationPercent": {
+          "type": "number"
+        },
+        "stopLossPct": {
+          "type": "number"
+        },
+        "takeProfitPct": {
+          "type": "number"
+        },
+        "trailingStopPct": {
+          "type": "number"
+        },
+        "maxOpenPositions": {
+          "type": "number"
+        },
+        "dailyLossCapPct": {
+          "type": "number"
+        },
+        "slippageBps": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["DRAFT", "ACTIVE", "PAUSED", "PAUSED_RISK_CAP"]
+        },
+        "lastBacktestReturnPct": {
+          "type": "number"
+        },
+        "lastBacktestSharpe": {
+          "type": "number"
+        },
+        "lastBacktestMaxDrawdownPct": {
+          "type": "number"
+        },
+        "lastBacktestWinRatePct": {
+          "type": "number"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "name",
+        "prompt",
+        "summary",
+        "symbols",
+        "timeframe",
+        "logicOperator",
+        "entryConditions",
+        "exitConditions",
+        "virtualCapital",
+        "allocationPercent",
+        "stopLossPct",
+        "takeProfitPct",
+        "trailingStopPct",
+        "maxOpenPositions",
+        "dailyLossCapPct",
+        "slippageBps",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AlgoOrder": {
+      "title": "AlgoOrder",
+      "description": "An immutable simulated paper-trade order or risk-guardrail block event",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "strategyId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "strategyName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "symbol": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[A-Z0-9_\\-\\.]+$"
+        },
+        "side": {
+          "type": "string",
+          "enum": ["BUY", "SELL"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["FILLED", "BLOCKED_RISK_CAP", "BLOCKED_FUNDS", "CANCELLED"]
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "price": {
+          "type": "number"
+        },
+        "notionalValue": {
+          "type": "number"
+        },
+        "realizedPnl": {
+          "type": "number"
+        },
+        "triggerReason": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "executedAtIso": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "tradingDate": {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "strategyId",
+        "strategyName",
+        "symbol",
+        "side",
+        "status",
+        "quantity",
+        "price",
+        "notionalValue",
+        "realizedPnl",
+        "triggerReason",
+        "executedAtIso",
+        "tradingDate",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -235,6 +445,14 @@
     "/users/{userId}/mutualFunds/{fundHoldingId}": {
       "schema": { "$ref": "#/entities/MutualFundHolding" },
       "description": "User-scoped Indian mutual fund holdings tracked by AMFI scheme code"
+    },
+    "/users/{userId}/algoStrategies/{strategyId}": {
+      "schema": { "$ref": "#/entities/AlgoStrategy" },
+      "description": "User-scoped algorithmic paper trading strategies and risk guardrails"
+    },
+    "/users/{userId}/algoOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/AlgoOrder" },
+      "description": "User-scoped simulated paper-trade execution and risk-guardrail ledger"
     }
   }
 }

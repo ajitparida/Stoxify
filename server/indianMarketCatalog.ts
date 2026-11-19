@@ -51,6 +51,18 @@ export const INDIAN_INDICES: CatalogStock[] = [
     debtToEquity: null,
     beta: 1.12,
   },
+  {
+    symbol: '^NSEMDCP50',
+    ticker: 'MIDCPNIFTY',
+    name: 'NIFTY Midcap 50 Index',
+    exchange: 'INDEX',
+    sector: 'Midcap Benchmark',
+    capCategory: 'Index',
+    peRatio: 28.5,
+    roce: null,
+    debtToEquity: null,
+    beta: 1.18,
+  },
 ];
 
 export const INDIAN_STOCK_UNIVERSE: CatalogStock[] = [

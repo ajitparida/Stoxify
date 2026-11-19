@@ -2,7 +2,9 @@ export type Exchange = 'NSE' | 'BSE';
 
 export type HoldingSource = 'manual' | 'screenshot' | 'signal';
 
-export type ChartRange = '1d' | '5d' | '1mo' | '6mo' | '1y';
+export type AlgoTimeframe = '1d' | '5d' | '1mo' | '6mo' | '1y';
+
+export type ChartRange = AlgoTimeframe | '3y' | '5y' | 'max';
 
 export interface MarketQuote {
   symbol: string;
@@ -26,11 +28,23 @@ export interface MarketQuote {
   sma200: number | null;
   rsi14: number | null;
   return1M: number | null;
+  return3M?: number | null;
   return6M: number | null;
   return1Y: number | null;
   peRatio: number | null;
+  forwardPE?: number | null;
   roce: number | null;
+  roePct?: number | null;
+  roaPct?: number | null;
+  revenueGrowthPct?: number | null;
+  earningsGrowthPct?: number | null;
+  operatingMarginPct?: number | null;
   debtToEquity: number | null;
+  nextEarningsDate?: string | null;
+  daysToEarnings?: number | null;
+  earningsRiskFlag?: boolean;
+  fundamentalsSource?: 'live_yahoo' | 'catalog_fallback';
+  confidence?: ConfidenceBreakdown;
   beta: number;
   annualDividendPerShare: number;
   dividendYield: number;
@@ -197,6 +211,8 @@ export interface HoldingAiRating {
   projection?: HorizonProjection;
   guardrailStatus?: 'PASSED' | 'ADJUSTED' | 'FLAGGED';
   guardrailNote?: string;
+  confidence?: ConfidenceBreakdown;
+  fundamentals?: LiveFundamentalsSnapshot | null;
 }
 
 export interface PortfolioAnalysisResponse {
@@ -227,6 +243,8 @@ export interface SymbolAiOutlook {
   projection: HorizonProjection;
   guardrailStatus: 'PASSED' | 'ADJUSTED' | 'FLAGGED';
   guardrailNote: string;
+  confidence?: ConfidenceBreakdown;
+  fundamentals?: LiveFundamentalsSnapshot | null;
   benchmarkNifty6M: number | null;
   analysisSource: 'gemini' | 'fallback_engine';
   quotaNotice?: string;
@@ -537,3 +555,306 @@ export interface AiStrategiesResponse {
   niftyBenchmark: MarketQuote | null;
   fetchedAt: string;
 }
+
+export type AlgoIndicator =
+  | 'RSI_14'
+  | 'PRICE_VS_SMA50'
+  | 'PRICE_VS_SMA200'
+  | 'EMA20_VS_SMA50'
+  | 'VOLUME_RATIO'
+  | 'DAY_CHANGE_PCT'
+  | 'SMA50_SLOPE_PCT';
+
+export type AlgoComparator = 'LT' | 'LTE' | 'GT' | 'GTE' | 'CROSS_ABOVE' | 'CROSS_BELOW';
+
+export type AlgoLogicOperator = 'AND' | 'OR';
+
+export type AlgoStrategyStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'PAUSED_RISK_CAP';
+
+export interface AlgoRuleCondition {
+  id: string;
+  indicator: AlgoIndicator;
+  comparator: AlgoComparator;
+  threshold: number;
+  label: string;
+}
+
+export interface AlgoStrategyDraft {
+  name: string;
+  prompt: string;
+  summary: string;
+  symbols: string[];
+  timeframe: AlgoTimeframe;
+  logicOperator: AlgoLogicOperator;
+  entryConditions: AlgoRuleCondition[];
+  exitConditions: AlgoRuleCondition[];
+  virtualCapital: number;
+  allocationPercent: number;
+  stopLossPct: number;
+  takeProfitPct: number;
+  trailingStopPct: number;
+  maxOpenPositions: number;
+  dailyLossCapPct: number;
+  slippageBps: number;
+}
+
+export interface AlgoStrategyRecord extends AlgoStrategyDraft {
+  id: string;
+  userId: string;
+  status: AlgoStrategyStatus;
+  lastBacktestReturnPct?: number;
+  lastBacktestSharpe?: number;
+  lastBacktestMaxDrawdownPct?: number;
+  lastBacktestWinRatePct?: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AlgoCompileResponse {
+  strategy: AlgoStrategyDraft;
+  analysisSource: 'gemini' | 'fallback_engine';
+  quotaNotice?: string;
+  generatedAt: string;
+}
+
+export interface AlgoEquityCurvePoint {
+  dateLabel: string;
+  equity: number;
+  benchmarkEquity: number;
+  equityIndexed: number;
+  niftyIndexed: number;
+  drawdownPct: number;
+}
+
+export type AlgoExitReason =
+  | 'TARGET'
+  | 'STOP_LOSS'
+  | 'TRAILING_STOP'
+  | 'EXIT_SIGNAL'
+  | 'DAILY_LOSS_CAP'
+  | 'END_OF_WINDOW';
+
+export interface AlgoBacktestTrade {
+  id: string;
+  symbol: string;
+  ticker: string;
+  entryDate: string;
+  exitDate: string;
+  barsHeld: number;
+  quantity: number;
+  entryPrice: number;
+  exitPrice: number;
+  grossPnl: number;
+  netPnl: number;
+  pnlPct: number;
+  exitReason: AlgoExitReason;
+}
+
+export interface AlgoBacktestSummary {
+  initialCapital: number;
+  finalEquity: number;
+  netPnl: number;
+  totalReturnPct: number;
+  niftyReturnPct: number;
+  alphaPct: number;
+  cagrPct: number;
+  sharpeRatio: number;
+  maxDrawdownPct: number;
+  winRatePct: number;
+  profitFactor: number;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  guardrailHaltsTriggered: number;
+  avgHoldingBars: number;
+}
+
+export interface AlgoBacktestResult {
+  strategyName: string;
+  timeframe: AlgoTimeframe;
+  symbolsTested: string[];
+  barCount: number;
+  summary: AlgoBacktestSummary;
+  equityCurve: AlgoEquityCurvePoint[];
+  trades: AlgoBacktestTrade[];
+  guardrailEvents: Array<{ dateLabel: string; message: string }>;
+  ranAt: string;
+}
+
+export type AlgoOrderSide = 'BUY' | 'SELL';
+
+export type AlgoOrderStatus = 'FILLED' | 'BLOCKED_RISK_CAP' | 'BLOCKED_FUNDS' | 'CANCELLED';
+
+export interface AlgoOrderRecord {
+  id: string;
+  userId: string;
+  strategyId: string;
+  strategyName: string;
+  symbol: string;
+  side: AlgoOrderSide;
+  status: AlgoOrderStatus;
+  quantity: number;
+  price: number;
+  notionalValue: number;
+  realizedPnl: number;
+  triggerReason: string;
+  executedAtIso: string;
+  tradingDate: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type AlgoOrderDraft = Omit<AlgoOrderRecord, 'id' | 'userId' | 'createdAt' | 'updatedAt'>;
+
+export interface PaperPositionSnapshot {
+  strategyId: string;
+  strategyName: string;
+  symbol: string;
+  ticker: string;
+  quantity: number;
+  avgEntryPrice: number;
+  livePrice: number;
+  investedValue: number;
+  marketValue: number;
+  unrealizedPnl: number;
+  unrealizedPnlPct: number;
+  stopLossPrice: number;
+  targetPrice: number;
+  enteredAtIso: string;
+}
+
+export interface AlgoPaperStrategyTelemetry {
+  strategyId: string;
+  strategyName: string;
+  status: AlgoStrategyStatus;
+  virtualCapital: number;
+  availableCash: number;
+  investedCapital: number;
+  realizedPnlTotal: number;
+  todayRealizedPnl: number;
+  todayUnrealizedPnl: number;
+  todayTotalPnl: number;
+  todayLossPct: number;
+  dailyLossCapPct: number;
+  dailyCapBreached: boolean;
+  openPositionsCount: number;
+  maxOpenPositions: number;
+}
+
+export interface AlgoPaperEvaluateResponse {
+  newOrders: AlgoOrderDraft[];
+  strategyStatusUpdates: Array<{ strategyId: string; status: AlgoStrategyStatus; reason: string }>;
+  openPositions: PaperPositionSnapshot[];
+  strategyTelemetry: AlgoPaperStrategyTelemetry[];
+  evaluatedAt: string;
+}
+
+export type PatternId =
+  | 'high_confidence'
+  | 'fresh_upward_move'
+  | 'steady_upward_trend'
+  | 'strong_on_dip'
+  | 'momentum_reset'
+  | 'higher_fundamental';
+
+export interface LiveFundamentalsSnapshot {
+  symbol: string;
+  trailingPE: number | null;
+  forwardPE: number | null;
+  roePct: number | null;
+  roaPct: number | null;
+  roceProxyPct: number | null;
+  revenueGrowthPct: number | null;
+  earningsGrowthPct: number | null;
+  operatingMarginPct: number | null;
+  debtToEquity: number | null;
+  nextEarningsDate: string | null;
+  daysToEarnings: number | null;
+  earningsRiskFlag: boolean;
+  source: 'live_yahoo' | 'catalog_fallback';
+  fetchedAt: string;
+}
+
+export interface ConfidencePillarDetail {
+  score: number;
+  weight: number;
+  weightedPoints: number;
+  summary: string;
+}
+
+export interface ConfidenceBreakdown {
+  overallScore: number;
+  tier: 'Strong' | 'Moderate' | 'Caution';
+  pillars: {
+    trendStructure: ConfidencePillarDetail;
+    relativeStrength: ConfidencePillarDetail;
+    momentumQuality: ConfidencePillarDetail;
+    fundamentalHealth: ConfidencePillarDetail;
+  };
+  matchedPatterns: PatternId[];
+  primaryPattern: PatternId | null;
+  computedAt: string;
+}
+
+export interface WalkForwardStats {
+  sampleCount: number;
+  winRate1M: number | null;
+  avgReturn1M: number | null;
+  winRate3M: number | null;
+  avgReturn3M: number | null;
+  lookbackMonths: number;
+  basisNote: string;
+}
+
+export interface MonthlyCohortEntry {
+  symbol: string;
+  ticker: string;
+  companyName: string;
+  exchange: Exchange;
+  sector: string;
+  confidenceScore: number;
+  return1M: number | null;
+  return3M: number | null;
+  ltp: number;
+  nextEarningsDate: string | null;
+  daysToEarnings: number | null;
+  earningsRiskFlag: boolean;
+  breakdown?: ConfidenceBreakdown;
+}
+
+export interface MonthlyCohortGroup {
+  monthKey: string;
+  monthLabel: string;
+  isLatest: boolean;
+  entries: MonthlyCohortEntry[];
+}
+
+export interface PatternDiscoveryItem {
+  id: PatternId;
+  title: string;
+  subtitle: string;
+  ruleSummary: string;
+  liveCount: number;
+  liveSymbols: string[];
+  hasUpcomingEarningsAlert: boolean;
+  upcomingEarningsCount: number;
+  walkForward: WalkForwardStats;
+  monthlyCohorts: MonthlyCohortGroup[];
+}
+
+export interface PatternDiscoveryResponse {
+  patterns: PatternDiscoveryItem[];
+  benchmarkSymbol: string;
+  universeCount: number;
+  computedAt: string;
+}
+
+export interface LiveResearchSignal extends ResearchSignal {
+  liveQuote: MarketQuote | null;
+  confidence?: ConfidenceBreakdown;
+  primaryPattern?: PatternId | null;
+  walkForward?: WalkForwardStats | null;
+  fundamentals?: LiveFundamentalsSnapshot | null;
+}
+
+

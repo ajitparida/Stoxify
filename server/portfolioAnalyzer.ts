@@ -1,8 +1,16 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { getQuotes } from './marketService.ts';
+import {
+  getLiveFundamentals,
+  getLiveFundamentalsBatch,
+  mergeQuoteWithFundamentals,
+} from './fundamentalsService.ts';
+import { computeConfidenceBreakdown } from './confidenceEngineService.ts';
 import type {
+  ConfidenceBreakdown,
   HoldingAiRating,
   HorizonProjection,
+  LiveFundamentalsSnapshot,
   PortfolioAnalysisResponse,
   SymbolAiOutlook,
 } from '../src/types/market.ts';
@@ -47,6 +55,7 @@ interface EnrichedTelemetryItem {
   sma50: number | null;
   sma200: number | null;
   return1M: number | null;
+  return3M: number | null;
   return6M: number | null;
   return1Y: number | null;
   peRatio: number | null;
@@ -55,6 +64,8 @@ interface EnrichedTelemetryItem {
   beta: number;
   volumeRatio: number;
   portfolioWeightPercent: number;
+  confidence?: ConfidenceBreakdown;
+  fundamentals?: LiveFundamentalsSnapshot | null;
 }
 
 function isQuotaOrRateLimitError(err: unknown): boolean {
@@ -326,6 +337,10 @@ async function evaluateTelemetryBatch(params: {
     ...(t.return6M !== null ? { r6m: t.return6M } : {}),
     ...(t.roce !== null ? { roce: t.roce } : {}),
     ...(t.peRatio !== null ? { pe: t.peRatio } : {}),
+    ...(t.confidence ? { confPct: t.confidence.overallScore } : {}),
+    ...(t.fundamentals?.earningsRiskFlag && t.fundamentals.nextEarningsDate
+      ? { earnings: t.fundamentals.nextEarningsDate }
+      : {}),
     beta: t.beta,
   }));
 
@@ -394,7 +409,6 @@ Data:${JSON.stringify(compactTelemetry)}`;
         model: candidate.model,
         contents: prompt,
         config: {
-          temperature: 0.1,
           thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
           systemInstruction:
             'You are a quantitative Indian equity portfolio analyst. Output concise, objective, data-grounded portfolio diagnostics in valid JSON. Rate every holding provided.',
@@ -564,6 +578,8 @@ function applyGuardrails(
           notes.length > 0
             ? notes.join(' ')
             : `Passed live β (${beta.toFixed(2)}x) & 50/200-DMA support checks.`,
+        confidence: t.confidence,
+        fundamentals: t.fundamentals ?? null,
       };
     });
 }
@@ -596,16 +612,49 @@ export async function analyzePortfolioHoldings(
   const uniqueHoldings = Array.from(consolidatedMap.values());
 
   const symbols = Array.from(new Set(['^NSEI', ...uniqueHoldings.map((h) => h.symbol)]));
-  const quotes = await getQuotes(symbols);
+  const [quotes, fundamentalsMap] = await Promise.all([
+    getQuotes(symbols),
+    getLiveFundamentalsBatch(uniqueHoldings.map((h) => h.symbol), 6),
+  ]);
   const nifty = quotes['^NSEI'] ?? null;
 
   const enrichedPayload = uniqueHoldings.map((h) => {
     const sym = h.symbol.toUpperCase();
-    const q = quotes[sym];
+    const fund = fundamentalsMap[sym] ?? null;
+    const rawQ = quotes[sym];
+    const q = rawQ ? mergeQuoteWithFundamentals(rawQ, fund) : undefined;
     const livePrice = q?.price ?? h.avgBuyPrice;
     const invested = h.quantity * h.avgBuyPrice;
     const currentValue = h.quantity * livePrice;
     const pnlPct = invested > 0 ? ((currentValue - invested) / invested) * 100 : 0;
+
+    const confidence = computeConfidenceBreakdown({
+      price: livePrice,
+      sma50: q?.sma50 ?? null,
+      sma200: q?.sma200 ?? null,
+      fiftyTwoWeekHigh: q?.fiftyTwoWeekHigh ?? null,
+      fiftyTwoWeekLow: q?.fiftyTwoWeekLow ?? null,
+      rsi14: q?.rsi14 ?? null,
+      volumeRatio: q?.volumeRatio ?? 1.0,
+      dayChangePercent: q?.changePercent ?? 0,
+      return1M: q?.return1M ?? null,
+      return3M: q?.return3M ?? null,
+      return6M: q?.return6M ?? null,
+      niftyReturn1M: nifty?.return1M ?? null,
+      niftyReturn3M: nifty?.return3M ?? null,
+      niftyReturn6M: nifty?.return6M ?? null,
+      sector: q?.sector || h.sector,
+      fundamentals: {
+        trailingPE: fund?.trailingPE ?? q?.peRatio ?? null,
+        forwardPE: fund?.forwardPE ?? null,
+        roePct: fund?.roePct ?? null,
+        roceProxyPct: fund?.roceProxyPct ?? q?.roce ?? null,
+        revenueGrowthPct: fund?.revenueGrowthPct ?? null,
+        earningsGrowthPct: fund?.earningsGrowthPct ?? null,
+        operatingMarginPct: fund?.operatingMarginPct ?? null,
+        debtToEquity: fund?.debtToEquity ?? q?.debtToEquity ?? null,
+      },
+    });
 
     return {
       symbol: sym,
@@ -623,13 +672,16 @@ export async function analyzePortfolioHoldings(
       sma50: q?.sma50 ?? null,
       sma200: q?.sma200 ?? null,
       return1M: q?.return1M ?? null,
+      return3M: q?.return3M ?? null,
       return6M: q?.return6M ?? null,
       return1Y: q?.return1Y ?? null,
-      peRatio: q?.peRatio ?? null,
-      roce: q?.roce ?? null,
-      debtToEquity: q?.debtToEquity ?? null,
+      peRatio: fund?.trailingPE ?? q?.peRatio ?? null,
+      roce: fund?.roceProxyPct ?? q?.roce ?? null,
+      debtToEquity: fund?.debtToEquity ?? q?.debtToEquity ?? null,
       beta: q?.beta ?? 1.0,
       volumeRatio: q?.volumeRatio ?? 1.0,
+      confidence,
+      fundamentals: fund,
     };
   });
 
@@ -769,13 +821,51 @@ export async function analyzeSingleSymbolOutlook(
   }
 
   const fetchList = Array.from(new Set(['^NSEI', symbol]));
-  const quotes = await getQuotes(fetchList);
-  const quote = quotes[symbol];
+  const [quotes, liveFundamentals] = await Promise.all([
+    getQuotes(fetchList),
+    symbol.startsWith('^') ? Promise.resolve(null) : getLiveFundamentals(symbol),
+  ]);
+  const rawQuote = quotes[symbol];
+  const quote = rawQuote ? mergeQuoteWithFundamentals(rawQuote, liveFundamentals) : undefined;
   const nifty = quotes['^NSEI'] ?? null;
 
   if (!quote || quote.price <= 0) {
     throw new Error(`No live market quote available for ${symbol}.`);
   }
+
+  const confidence = computeConfidenceBreakdown({
+    price: quote.price,
+    sma50: quote.sma50 ?? null,
+    sma200: quote.sma200 ?? null,
+    fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh ?? null,
+    fiftyTwoWeekLow: quote.fiftyTwoWeekLow ?? null,
+    rsi14: quote.rsi14 ?? null,
+    volumeRatio: quote.volumeRatio ?? 1.0,
+    dayChangePercent: quote.changePercent ?? 0,
+    return1M: quote.return1M ?? null,
+    return3M: quote.return3M ?? null,
+    return6M: quote.return6M ?? null,
+    niftyReturn1M: nifty?.return1M ?? null,
+    niftyReturn3M: nifty?.return3M ?? null,
+    niftyReturn6M: nifty?.return6M ?? null,
+    sector: quote.sector || 'Equities',
+    fundamentals: liveFundamentals
+      ? {
+          trailingPE: liveFundamentals.trailingPE,
+          forwardPE: liveFundamentals.forwardPE,
+          roePct: liveFundamentals.roePct,
+          roceProxyPct: liveFundamentals.roceProxyPct,
+          revenueGrowthPct: liveFundamentals.revenueGrowthPct,
+          earningsGrowthPct: liveFundamentals.earningsGrowthPct,
+          operatingMarginPct: liveFundamentals.operatingMarginPct,
+          debtToEquity: liveFundamentals.debtToEquity,
+        }
+      : {
+          trailingPE: quote.peRatio,
+          roceProxyPct: quote.roce,
+          debtToEquity: quote.debtToEquity,
+        },
+  });
 
   const telemetryItem: EnrichedTelemetryItem = {
     symbol,
@@ -793,6 +883,7 @@ export async function analyzeSingleSymbolOutlook(
     sma50: quote.sma50 ?? null,
     sma200: quote.sma200 ?? null,
     return1M: quote.return1M ?? null,
+    return3M: quote.return3M ?? null,
     return6M: quote.return6M ?? null,
     return1Y: quote.return1Y ?? null,
     peRatio: quote.peRatio ?? null,
@@ -801,6 +892,8 @@ export async function analyzeSingleSymbolOutlook(
     beta: quote.beta ?? 1.0,
     volumeRatio: quote.volumeRatio ?? 1.0,
     portfolioWeightPercent: 0,
+    confidence,
+    fundamentals: liveFundamentals,
   };
 
   let rawRatings: RawGeminiRating[] = [];
@@ -837,10 +930,18 @@ export async function analyzeSingleSymbolOutlook(
       sma50: telemetryItem.sma50,
       sma200: telemetryItem.sma200,
       r1m: telemetryItem.return1M,
+      r3m: telemetryItem.return3M,
       r6m: telemetryItem.return6M,
       r1y: telemetryItem.return1Y,
       roce: telemetryItem.roce,
+      roe: liveFundamentals?.roePct ?? null,
+      revGrowthPct: liveFundamentals?.revenueGrowthPct ?? null,
+      earnGrowthPct: liveFundamentals?.earningsGrowthPct ?? null,
       pe: telemetryItem.peRatio,
+      fwdPe: liveFundamentals?.forwardPE ?? null,
+      de: telemetryItem.debtToEquity,
+      nextEarningsDate: liveFundamentals?.nextEarningsDate ?? null,
+      confidenceScore: confidence.overallScore,
       beta: telemetryItem.beta,
       volRatio: telemetryItem.volumeRatio,
     };
@@ -901,7 +1002,6 @@ Data: ${JSON.stringify(compactPayload)}`;
           model: candidate.model,
           contents: prompt,
           config: {
-            temperature: 0.1,
             thinkingConfig: { thinkingLevel: candidate.thinkingLevel },
             systemInstruction:
               'You are a quantitative Indian equity analyst for Stoxify. Produce crisp, objective JSON outlooks strictly grounded in the live market telemetry.',
@@ -958,6 +1058,8 @@ Data: ${JSON.stringify(compactPayload)}`;
     projection,
     guardrailStatus: guarded.guardrailStatus ?? 'PASSED',
     guardrailNote: guarded.guardrailNote ?? 'Verified against live quote telemetry.',
+    confidence,
+    fundamentals: liveFundamentals,
     benchmarkNifty6M: nifty?.return6M ?? null,
     analysisSource: usedFallback ? 'fallback_engine' : 'gemini',
     quotaNotice: usedFallback ? QUOTA_EXHAUSTED_NOTICE : undefined,
