@@ -1,5 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Analytics } from '@vercel/analytics/react';
 import App from './App.tsx';
 import './index.css';
 
@@ -47,5 +48,6 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 createRoot(document.getElementById('root')!).render(
   <AppErrorBoundary>
     <App />
+    <Analytics />
   </AppErrorBoundary>
 );
