@@ -1088,7 +1088,7 @@ export function MarketChartTerminal({
                     typeof outlook.projection.return1MPercent === 'number'
                       ? [
                           {
-                            label: '1-Month Price',
+                            label: 'Next 1M Est.',
                             val: outlook.projection.value1M,
                             pct: outlook.projection.return1MPercent,
                             suffix: 'est. return',
@@ -1099,7 +1099,7 @@ export function MarketChartTerminal({
                     typeof outlook.projection.return3MPercent === 'number'
                       ? [
                           {
-                            label: '3-Month Price',
+                            label: 'Next 3M Est.',
                             val: outlook.projection.value3M,
                             pct: outlook.projection.return3MPercent,
                             suffix: 'est. return',
@@ -1107,25 +1107,25 @@ export function MarketChartTerminal({
                         ]
                       : []),
                     {
-                      label: '6-Month Price',
+                      label: 'Next 6M Est.',
                       val: outlook.projection.value6M,
                       pct: outlook.projection.return6MPercent,
                       suffix: 'est. return',
                     },
                     {
-                      label: '1-Year Price',
+                      label: 'Next 1Y Est.',
                       val: outlook.projection.value1Y,
                       pct: outlook.projection.return1YPercent,
                       suffix: 'est. return',
                     },
                     {
-                      label: '5-Year Price',
+                      label: 'Next 5Y Est.',
                       val: outlook.projection.value5Y,
                       pct: outlook.projection.cagr5YPercent,
                       suffix: 'CAGR',
                     },
                     {
-                      label: '10-Year Price',
+                      label: 'Next 10Y Est.',
                       val: outlook.projection.value10Y,
                       pct: outlook.projection.cagr10YPercent,
                       suffix: 'CAGR',

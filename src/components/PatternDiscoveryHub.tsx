@@ -489,9 +489,16 @@ export function PatternDiscoveryHub({
                                       {entry.confidenceScore.toFixed(2)}%
                                     </div>
                                   </div>
-                                  <div className="text-right min-w-[74px]">
+                                  <div
+                                    className="text-right min-w-[78px]"
+                                    title={
+                                      cohort.isLatest
+                                        ? 'Trailing 1-month price change up to today’s LTP'
+                                        : 'Actual realized 1-month return after this historical shortlist'
+                                    }
+                                  >
                                     <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                                      {cohort.isLatest ? '1M Trend' : '1M Return'}
+                                      {cohort.isLatest ? 'Past 1M' : '1M Realized'}
                                     </div>
                                     <div
                                       className={`text-sm font-bold font-mono-tabular ${
