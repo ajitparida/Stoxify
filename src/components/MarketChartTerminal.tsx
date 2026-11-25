@@ -16,6 +16,8 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   LineChart as LineChartIcon,
   Plus,
   RefreshCw,
@@ -30,6 +32,7 @@ import type {
   HoldingAiRating,
   SearchResultItem,
   SymbolAiOutlook,
+  TechnicalSummaryRating,
 } from '../types/market';
 import { formatINR, formatPercent, formatVolume } from '../utils/portfolioAnalytics';
 import {
@@ -113,6 +116,19 @@ export function MarketChartTerminal({
   const [outlookLoading, setOutlookLoading] = useState(true);
   const [outlookError, setOutlookError] = useState<string | null>(null);
   const [showAiLevels, setShowAiLevels] = useState(false);
+  const [showTechIndicators, setShowTechIndicators] = useState(false);
+  const [showFairValueModels, setShowFairValueModels] = useState(false);
+  const [techTimeframe, setTechTimeframe] = useState<'daily' | 'weekly'>('daily');
+
+  const getTechRatingStyle = (rating: TechnicalSummaryRating) => {
+    if (rating === 'Strong Buy' || rating === 'Buy') {
+      return 'bg-green-50 text-green-800 border-green-200';
+    }
+    if (rating === 'Strong Sell' || rating === 'Sell') {
+      return 'bg-red-50 text-red-800 border-red-200';
+    }
+    return 'bg-amber-50 text-amber-800 border-amber-200';
+  };
 
   const fetchChart = async (sym: string, r: ChartRange) => {
     setLoading(true);
@@ -193,6 +209,9 @@ export function MarketChartTerminal({
 
   useEffect(() => {
     setShowAiLevels(false);
+    setShowTechIndicators(false);
+    setShowFairValueModels(false);
+    setTechTimeframe('daily');
     if (syncedPortfolioKey && portfolioRating?.projection) {
       setOutlookLoading(false);
       setOutlookError(null);
@@ -202,6 +221,11 @@ export function MarketChartTerminal({
     void fetchOutlook(symbol, false, controller.signal);
     return () => controller.abort();
   }, [symbol, syncedPortfolioKey]);
+
+  const matchingFetchedOutlook =
+    fetchedOutlook && fetchedOutlook.symbol.toUpperCase() === symbol.toUpperCase()
+      ? fetchedOutlook
+      : null;
 
   const outlook: SymbolAiOutlook | null =
     syncedPortfolioKey && portfolioRating?.projection
@@ -230,6 +254,8 @@ export function MarketChartTerminal({
             portfolioRating.guardrailNote ?? 'Verified against live quote telemetry.',
           confidence: portfolioRating.confidence,
           fundamentals: portfolioRating.fundamentals ?? null,
+          technicalSummary: matchingFetchedOutlook?.technicalSummary ?? null,
+          fairValue: matchingFetchedOutlook?.fairValue ?? null,
           benchmarkNifty6M: portfolioAnalysisMeta?.benchmarkNifty6M ?? null,
           analysisSource: portfolioAnalysisMeta?.analysisSource ?? 'gemini',
           quotaNotice: portfolioAnalysisMeta?.quotaNotice,
@@ -905,7 +931,7 @@ export function MarketChartTerminal({
                     earningsRiskFlag={outlook.fundamentals.earningsRiskFlag}
                   />
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 text-xs">
                   <div>
                     <div className="text-[11px] text-slate-500">Trailing P/E</div>
                     <div className="font-mono-tabular font-semibold text-slate-900 mt-0.5">
@@ -961,6 +987,44 @@ export function MarketChartTerminal({
                     >
                       {outlook.fundamentals.earningsGrowthPct !== null
                         ? formatPercent(outlook.fundamentals.earningsGrowthPct)
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">Op. Margin</div>
+                    <div
+                      className={`font-mono-tabular font-semibold mt-0.5 ${
+                        outlook.fundamentals.operatingMarginPct !== null
+                          ? outlook.fundamentals.operatingMarginPct >= 15
+                            ? 'text-green-700'
+                            : outlook.fundamentals.operatingMarginPct < 5
+                            ? 'text-red-700'
+                            : 'text-slate-900'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {outlook.fundamentals.operatingMarginPct !== null
+                        ? `${outlook.fundamentals.operatingMarginPct.toFixed(1)}%`
+                        : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-500">FCF Margin</div>
+                    <div
+                      className={`font-mono-tabular font-semibold mt-0.5 ${
+                        outlook.fundamentals.fcfMarginPct !== null &&
+                        outlook.fundamentals.fcfMarginPct !== undefined
+                          ? outlook.fundamentals.fcfMarginPct >= 8
+                            ? 'text-green-700'
+                            : outlook.fundamentals.fcfMarginPct < 0
+                            ? 'text-red-700'
+                            : 'text-slate-900'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {outlook.fundamentals.fcfMarginPct !== null &&
+                      outlook.fundamentals.fcfMarginPct !== undefined
+                        ? `${outlook.fundamentals.fcfMarginPct.toFixed(1)}%`
                         : '—'}
                     </div>
                   </div>
@@ -1068,6 +1132,472 @@ export function MarketChartTerminal({
                 </div>
               </div>
             </div>
+
+            {/* Institutional Validation Strip: Fair Value + Analyst Consensus | Technical Summary + Pivots */}
+            {(outlook.fairValue ||
+              outlook.fundamentals?.analystConsensus ||
+              outlook.technicalSummary) && (() => {
+              const consensus = outlook.fundamentals?.analystConsensus ?? null;
+              const hasLeftCard = Boolean(outlook.fairValue || consensus);
+              const tech = outlook.technicalSummary ?? null;
+              const activeTech =
+                tech && techTimeframe === 'weekly' && tech.weekly ? tech.weekly : tech;
+              const pivots = tech?.pivots ?? null;
+
+              const getConsensusBadgeStyle = (
+                label: string | null
+              ) => {
+                if (label === 'Strong Buy' || label === 'Buy') {
+                  return 'bg-green-50 text-green-800 border-green-200';
+                }
+                if (label === 'Sell' || label === 'Underperform') {
+                  return 'bg-red-50 text-red-800 border-red-200';
+                }
+                return 'bg-amber-50 text-amber-800 border-amber-200';
+              };
+
+              return (
+                <div
+                  className={`grid grid-cols-1 ${
+                    hasLeftCard && activeTech ? 'lg:grid-cols-2' : ''
+                  } gap-4`}
+                >
+                  {hasLeftCard && (
+                    <div className="p-4 bg-white border border-slate-200 rounded-lg space-y-4">
+                      {outlook.fairValue && (
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-bold text-slate-900">
+                                Intrinsic Fair Value
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                Multi-model valuation · {outlook.fairValue.uncertainty} uncertainty
+                              </div>
+                            </div>
+                            <span
+                              className={`px-2 py-0.5 text-[11px] font-bold border rounded-md whitespace-nowrap shrink-0 ${
+                                outlook.fairValue.verdict === 'Undervalued'
+                                  ? 'bg-green-50 text-green-800 border-green-200'
+                                  : outlook.fairValue.verdict === 'Overvalued'
+                                  ? 'bg-red-50 text-red-800 border-red-200'
+                                  : 'bg-slate-50 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {outlook.fairValue.verdict}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-baseline justify-between gap-3 pt-0.5">
+                            <div className="flex items-baseline gap-2.5">
+                              <span className="text-xl font-bold font-mono-tabular text-slate-900">
+                                {formatINR(outlook.fairValue.fairValue)}
+                              </span>
+                              <span
+                                className={`text-xs font-mono-tabular font-semibold ${
+                                  outlook.fairValue.upsidePercent >= 0
+                                    ? 'text-green-700'
+                                    : 'text-red-700'
+                                }`}
+                              >
+                                {formatPercent(outlook.fairValue.upsidePercent)} vs LTP
+                              </span>
+                            </div>
+                            <div className="text-[11px] font-mono-tabular text-slate-500">
+                              Range {formatINR(outlook.fairValue.lowEstimate)} –{' '}
+                              {formatINR(outlook.fairValue.highEstimate)}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                            <span className="truncate pr-2">{outlook.fairValue.basisNote}</span>
+                            <button
+                              type="button"
+                              onClick={() => setShowFairValueModels((prev) => !prev)}
+                              className="inline-flex items-center gap-1 font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0"
+                            >
+                              <span>
+                                {showFairValueModels
+                                  ? 'Hide models'
+                                  : `${outlook.fairValue.models.length} models`}
+                              </span>
+                              {showFairValueModels ? (
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+
+                          {showFairValueModels && (
+                            <div className="pt-2 border-t border-slate-100 space-y-2">
+                              {outlook.fairValue.models.map((m) => (
+                                <div
+                                  key={m.name}
+                                  className="flex items-center justify-between gap-3 text-xs"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-800">
+                                      {m.name}{' '}
+                                      <span className="font-mono-tabular font-normal text-[11px] text-slate-400">
+                                        ({m.weightPct}%)
+                                      </span>
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 truncate">
+                                      {m.basis}
+                                    </div>
+                                  </div>
+                                  <div className="font-mono-tabular font-semibold text-slate-900 shrink-0">
+                                    {formatINR(m.value)}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {consensus && (consensus.targetMean !== null || consensus.recommendationLabel) && (
+                        <div
+                          className={`${
+                            outlook.fairValue ? 'pt-3.5 border-t border-slate-200/80' : ''
+                          } space-y-2.5`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <div className="text-xs font-bold text-slate-900">
+                                Brokerage Analyst Consensus
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                {consensus.analystCount !== null
+                                  ? `${consensus.analystCount} covering analysts`
+                                  : 'Institutional coverage'}
+                                {consensus.recommendationMean !== null
+                                  ? ` · Score ${consensus.recommendationMean.toFixed(2)}/5`
+                                  : ''}
+                              </div>
+                            </div>
+                            {consensus.recommendationLabel && (
+                              <span
+                                className={`px-2 py-0.5 text-[11px] font-bold border rounded-md whitespace-nowrap shrink-0 ${getConsensusBadgeStyle(
+                                  consensus.recommendationLabel
+                                )}`}
+                              >
+                                {consensus.recommendationLabel}
+                              </span>
+                            )}
+                          </div>
+
+                          {consensus.targetMean !== null && (
+                            <div className="flex flex-wrap items-baseline justify-between gap-3">
+                              <div className="flex items-baseline gap-2.5">
+                                <span className="text-base font-bold font-mono-tabular text-slate-900">
+                                  {formatINR(consensus.targetMean)}
+                                </span>
+                                <span
+                                  className={`text-xs font-mono-tabular font-semibold ${
+                                    consensus.targetMean >= outlook.livePrice
+                                      ? 'text-green-700'
+                                      : 'text-red-700'
+                                  }`}
+                                >
+                                  {formatPercent(
+                                    ((consensus.targetMean - outlook.livePrice) /
+                                      Math.max(0.01, outlook.livePrice)) *
+                                      100
+                                  )}{' '}
+                                  12M avg
+                                </span>
+                              </div>
+                              {consensus.targetLow !== null && consensus.targetHigh !== null && (
+                                <div className="text-[11px] font-mono-tabular text-slate-500">
+                                  Low {formatINR(consensus.targetLow)} · High{' '}
+                                  {formatINR(consensus.targetHigh)}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {consensus.targetLow !== null &&
+                            consensus.targetHigh !== null &&
+                            consensus.targetHigh > consensus.targetLow && (() => {
+                              const minV = Math.min(consensus.targetLow, outlook.livePrice);
+                              const maxV = Math.max(consensus.targetHigh, outlook.livePrice);
+                              const span = Math.max(1, maxV - minV);
+                              const ltpPct = ((outlook.livePrice - minV) / span) * 100;
+                              const meanPct =
+                                consensus.targetMean !== null
+                                  ? ((consensus.targetMean - minV) / span) * 100
+                                  : null;
+                              const rangeStartPct = ((consensus.targetLow - minV) / span) * 100;
+                              const rangeWidthPct =
+                                ((consensus.targetHigh - consensus.targetLow) / span) * 100;
+
+                              return (
+                                <div className="pt-1 space-y-1">
+                                  <div className="relative h-2 bg-slate-100 rounded-sm overflow-visible">
+                                    <div
+                                      className="absolute top-0 bottom-0 bg-blue-100 border border-blue-200 rounded-sm"
+                                      style={{
+                                        left: `${rangeStartPct}%`,
+                                        width: `${Math.max(2, rangeWidthPct)}%`,
+                                      }}
+                                    />
+                                    {meanPct !== null && (
+                                      <div
+                                        className="absolute -top-0.5 -bottom-0.5 w-0.5 bg-blue-700"
+                                        style={{ left: `${meanPct}%` }}
+                                        title={`Street Avg ${formatINR(consensus.targetMean ?? 0)}`}
+                                      />
+                                    )}
+                                    <div
+                                      className="absolute -top-1 w-2 h-4 bg-slate-900 rounded-[2px] -translate-x-1/2"
+                                      style={{ left: `${ltpPct}%` }}
+                                      title={`Live Price ${formatINR(outlook.livePrice)}`}
+                                    />
+                                  </div>
+                                  <div className="flex items-center justify-between text-[10px] text-slate-400">
+                                    <span>■ Live LTP</span>
+                                    <span>| Street Mean Target</span>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {activeTech && (
+                    <div className="p-4 bg-white border border-slate-200 rounded-lg space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">
+                            Technical Summary ({techTimeframe === 'weekly' && tech?.weekly ? 'Weekly' : 'Daily'})
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-mono-tabular">
+                            {activeTech.buyCount} Buy · {activeTech.neutralCount} Neutral ·{' '}
+                            {activeTech.sellCount} Sell
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {tech?.weekly && (
+                            <div className="inline-flex border border-slate-200 rounded-md overflow-hidden text-[11px] font-medium">
+                              <button
+                                type="button"
+                                onClick={() => setTechTimeframe('daily')}
+                                className={`px-2 py-0.5 transition-colors whitespace-nowrap shrink-0 ${
+                                  techTimeframe === 'daily'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                Daily
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTechTimeframe('weekly')}
+                                className={`px-2 py-0.5 transition-colors whitespace-nowrap shrink-0 ${
+                                  techTimeframe === 'weekly'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'bg-white text-slate-600 hover:bg-slate-50'
+                                }`}
+                              >
+                                Weekly
+                              </button>
+                            </div>
+                          )}
+                          <span
+                            className={`px-2 py-0.5 text-[11px] font-bold border rounded-md whitespace-nowrap shrink-0 ${getTechRatingStyle(
+                              activeTech.rating
+                            )}`}
+                          >
+                            {activeTech.rating}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Split Moving Averages vs Oscillators gauges */}
+                      <div className="grid grid-cols-2 gap-3 pt-0.5">
+                        <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-md">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-medium text-slate-500">
+                              Moving Averages
+                            </span>
+                            <span
+                              className={`text-[11px] font-bold ${
+                                activeTech.movingAverages.rating.includes('Buy')
+                                  ? 'text-green-700'
+                                  : activeTech.movingAverages.rating.includes('Sell')
+                                  ? 'text-red-700'
+                                  : 'text-amber-700'
+                              }`}
+                            >
+                              {activeTech.movingAverages.rating}
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-mono-tabular text-slate-600 mt-1">
+                            {activeTech.movingAverages.buyCount}B ·{' '}
+                            {activeTech.movingAverages.neutralCount}N ·{' '}
+                            {activeTech.movingAverages.sellCount}S
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-md">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-medium text-slate-500">
+                              Oscillators
+                            </span>
+                            <span
+                              className={`text-[11px] font-bold ${
+                                activeTech.oscillators.rating.includes('Buy')
+                                  ? 'text-green-700'
+                                  : activeTech.oscillators.rating.includes('Sell')
+                                  ? 'text-red-700'
+                                  : 'text-amber-700'
+                              }`}
+                            >
+                              {activeTech.oscillators.rating}
+                            </span>
+                          </div>
+                          <div className="text-[11px] font-mono-tabular text-slate-600 mt-1">
+                            {activeTech.oscillators.buyCount}B ·{' '}
+                            {activeTech.oscillators.neutralCount}N ·{' '}
+                            {activeTech.oscillators.sellCount}S
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Classic Pivot Points Strip (S3–S1 / Pivot / R1–R3) */}
+                      {pivots && (
+                        <div className="pt-2.5 border-t border-slate-100 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-semibold text-slate-700">
+                              Classic Pivot Points (Daily)
+                            </span>
+                            <span className="font-mono-tabular text-[10px] text-slate-400">
+                              Session {pivots.basisDate}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-7 gap-1 text-center">
+                            {(
+                              [
+                                { k: 'S3', v: pivots.s3, tone: 'text-green-800 bg-green-50/70 border-green-200/70' },
+                                { k: 'S2', v: pivots.s2, tone: 'text-green-800 bg-green-50/70 border-green-200/70' },
+                                { k: 'S1', v: pivots.s1, tone: 'text-green-700 bg-green-50/70 border-green-200/70' },
+                                { k: 'Pivot', v: pivots.pivot, tone: 'text-slate-900 bg-slate-100 border-slate-300 font-bold' },
+                                { k: 'R1', v: pivots.r1, tone: 'text-red-700 bg-red-50/70 border-red-200/70' },
+                                { k: 'R2', v: pivots.r2, tone: 'text-red-800 bg-red-50/70 border-red-200/70' },
+                                { k: 'R3', v: pivots.r3, tone: 'text-red-800 bg-red-50/70 border-red-200/70' },
+                              ] as const
+                            ).map((pt) => (
+                              <div
+                                key={pt.k}
+                                className={`px-1 py-1.5 rounded border ${pt.tone}`}
+                              >
+                                <div className="text-[9px] font-semibold uppercase tracking-tight opacity-75">
+                                  {pt.k}
+                                </div>
+                                <div className="text-[10px] font-mono-tabular font-semibold mt-0.5 truncate">
+                                  {pt.v >= 10000
+                                    ? pt.v.toFixed(0)
+                                    : pt.v.toFixed(1)}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 text-[11px] text-slate-500">
+                        <span className="truncate">
+                          EMA10 · SMA20/50/100/200 · RSI · MACD · Stoch · ADX · CCI
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowTechIndicators((prev) => !prev)}
+                          className="inline-flex items-center gap-1 font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0 ml-2"
+                        >
+                          <span>
+                            {showTechIndicators
+                              ? 'Hide'
+                              : `Inspect ${
+                                  activeTech.movingAverages.items.length +
+                                  activeTech.oscillators.items.length
+                                }`}
+                          </span>
+                          {showTechIndicators ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+
+                      {showTechIndicators && (
+                        <div className="pt-2 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                              Moving Averages
+                            </div>
+                            {activeTech.movingAverages.items.map((item) => (
+                              <div
+                                key={item.name}
+                                className="flex items-center justify-between gap-2 py-0.5"
+                              >
+                                <span className="text-slate-600">{item.name}</span>
+                                <span className="font-mono-tabular text-slate-800">
+                                  {item.value}
+                                </span>
+                                <span
+                                  className={`font-semibold text-[11px] w-12 text-right ${
+                                    item.signal === 'Buy'
+                                      ? 'text-green-700'
+                                      : item.signal === 'Sell'
+                                      ? 'text-red-700'
+                                      : 'text-slate-500'
+                                  }`}
+                                >
+                                  {item.signal}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                              Oscillators &amp; Trend
+                            </div>
+                            {activeTech.oscillators.items.map((item) => (
+                              <div
+                                key={item.name}
+                                className="flex items-center justify-between gap-2 py-0.5"
+                              >
+                                <span className="text-slate-600">{item.name}</span>
+                                <span className="font-mono-tabular text-slate-800">
+                                  {item.value}
+                                </span>
+                                <span
+                                  className={`font-semibold text-[11px] w-12 text-right ${
+                                    item.signal === 'Buy'
+                                      ? 'text-green-700'
+                                      : item.signal === 'Sell'
+                                      ? 'text-red-700'
+                                      : 'text-slate-500'
+                                  }`}
+                                >
+                                  {item.signal}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Multi-Horizon Price Prediction Grid */}
             <div className="space-y-2.5">

@@ -1,5 +1,9 @@
 import { findCatalogEntry } from './marketService.ts';
-import type { LiveFundamentalsSnapshot, MarketQuote } from '../src/types/market.ts';
+import type {
+  AnalystConsensusSnapshot,
+  LiveFundamentalsSnapshot,
+  MarketQuote,
+} from '../src/types/market.ts';
 
 interface CrumbSession {
   cookie: string;
@@ -38,6 +42,8 @@ interface YahooQuoteSummaryResponse {
       defaultKeyStatistics?: {
         forwardPE?: YahooRawField;
         trailingEps?: YahooRawField;
+        priceToBook?: YahooRawField;
+        enterpriseToEbitda?: YahooRawField;
       };
       financialData?: {
         returnOnEquity?: YahooRawField;
@@ -45,7 +51,18 @@ interface YahooQuoteSummaryResponse {
         revenueGrowth?: YahooRawField;
         earningsGrowth?: YahooRawField;
         operatingMargins?: YahooRawField;
+        profitMargins?: YahooRawField;
+        freeCashflow?: YahooRawField;
+        operatingCashflow?: YahooRawField;
+        totalRevenue?: YahooRawField;
         debtToEquity?: YahooRawField;
+        targetMeanPrice?: YahooRawField;
+        targetMedianPrice?: YahooRawField;
+        targetHighPrice?: YahooRawField;
+        targetLowPrice?: YahooRawField;
+        numberOfAnalystOpinions?: YahooRawField;
+        recommendationMean?: YahooRawField;
+        recommendationKey?: string;
       };
       calendarEvents?: {
         earnings?: {
@@ -133,22 +150,47 @@ async function getYahooCrumbSession(forceRefresh = false): Promise<CrumbSession 
   return crumbRefreshPromise;
 }
 
+function normalizeRecommendationLabel(
+  key?: string | null,
+  mean?: number | null
+): AnalystConsensusSnapshot['recommendationLabel'] {
+  const k = (key || '').trim().toLowerCase();
+  if (k === 'strong_buy' || k === 'strongbuy') return 'Strong Buy';
+  if (k === 'buy') return 'Buy';
+  if (k === 'hold') return 'Hold';
+  if (k === 'underperform') return 'Underperform';
+  if (k === 'sell' || k === 'strong_sell') return 'Sell';
+  if (typeof mean === 'number' && Number.isFinite(mean)) {
+    if (mean <= 1.75) return 'Strong Buy';
+    if (mean <= 2.45) return 'Buy';
+    if (mean <= 3.35) return 'Hold';
+    if (mean <= 4.15) return 'Underperform';
+    return 'Sell';
+  }
+  return null;
+}
+
 function buildCatalogFallback(symbol: string): LiveFundamentalsSnapshot {
   const catalog = findCatalogEntry(symbol);
   return {
     symbol: symbol.toUpperCase(),
     trailingPE: catalog?.peRatio ?? null,
     forwardPE: null,
+    priceToBook: null,
+    evToEbitda: null,
     roePct: null,
     roaPct: null,
     roceProxyPct: catalog?.roce ?? null,
     revenueGrowthPct: null,
     earningsGrowthPct: null,
     operatingMarginPct: null,
+    profitMarginPct: null,
+    fcfMarginPct: null,
     debtToEquity: catalog?.debtToEquity ?? null,
     nextEarningsDate: null,
     daysToEarnings: null,
     earningsRiskFlag: false,
+    analystConsensus: null,
     source: 'catalog_fallback',
     fetchedAt: new Date().toISOString(),
   };
@@ -243,12 +285,26 @@ export async function getLiveFundamentals(symbolInput: string): Promise<LiveFund
   const rawTrailingPE = extractRawNumber(detail?.trailingPE);
   const rawForwardPE =
     extractRawNumber(detail?.forwardPE) ?? extractRawNumber(stats?.forwardPE);
+  const rawPriceToBook = extractRawNumber(stats?.priceToBook);
+  const rawEvToEbitda = extractRawNumber(stats?.enterpriseToEbitda);
   const rawRoe = extractRawNumber(fin?.returnOnEquity);
   const rawRoa = extractRawNumber(fin?.returnOnAssets);
   const rawRevGrowth = extractRawNumber(fin?.revenueGrowth);
   const rawEarnGrowth = extractRawNumber(fin?.earningsGrowth);
   const rawOpMargin = extractRawNumber(fin?.operatingMargins);
+  const rawProfitMargin = extractRawNumber(fin?.profitMargins);
+  const rawFcf = extractRawNumber(fin?.freeCashflow);
+  const rawOcf = extractRawNumber(fin?.operatingCashflow);
+  const rawTotalRev = extractRawNumber(fin?.totalRevenue);
   const rawDePct = extractRawNumber(fin?.debtToEquity);
+
+  const rawTargetMean = extractRawNumber(fin?.targetMeanPrice);
+  const rawTargetMedian = extractRawNumber(fin?.targetMedianPrice);
+  const rawTargetHigh = extractRawNumber(fin?.targetHighPrice);
+  const rawTargetLow = extractRawNumber(fin?.targetLowPrice);
+  const rawAnalystCount = extractRawNumber(fin?.numberOfAnalystOpinions);
+  const rawRecMean = extractRawNumber(fin?.recommendationMean);
+  const rawRecKey = typeof fin?.recommendationKey === 'string' ? fin.recommendationKey : null;
 
   const trailingPE =
     rawTrailingPE !== null && rawTrailingPE > 0 && rawTrailingPE < 600
@@ -257,6 +313,14 @@ export async function getLiveFundamentals(symbolInput: string): Promise<LiveFund
   const forwardPE =
     rawForwardPE !== null && rawForwardPE > 0 && rawForwardPE < 600
       ? Number(rawForwardPE.toFixed(2))
+      : null;
+  const priceToBook =
+    rawPriceToBook !== null && rawPriceToBook > 0 && rawPriceToBook < 150
+      ? Number(rawPriceToBook.toFixed(2))
+      : null;
+  const evToEbitda =
+    rawEvToEbitda !== null && rawEvToEbitda > 1 && rawEvToEbitda < 120
+      ? Number(rawEvToEbitda.toFixed(2))
       : null;
 
   const roePct = rawRoe !== null ? Number((rawRoe * 100).toFixed(2)) : null;
@@ -276,12 +340,56 @@ export async function getLiveFundamentals(symbolInput: string): Promise<LiveFund
     rawEarnGrowth !== null ? Number((rawEarnGrowth * 100).toFixed(2)) : null;
   const operatingMarginPct =
     rawOpMargin !== null ? Number((rawOpMargin * 100).toFixed(2)) : null;
+  const profitMarginPct =
+    rawProfitMargin !== null ? Number((rawProfitMargin * 100).toFixed(2)) : null;
+
+  const isFinancialSector = /bank|financ|insur|nbfc/i.test(catalog?.sector || '');
+  let fcfMarginPct: number | null = null;
+  if (!isFinancialSector && rawTotalRev !== null && rawTotalRev > 0) {
+    if (rawFcf !== null) {
+      const pct = (rawFcf / rawTotalRev) * 100;
+      if (pct >= -100 && pct <= 100) fcfMarginPct = Number(pct.toFixed(2));
+    } else if (rawOcf !== null) {
+      const pct = ((rawOcf * 0.7) / rawTotalRev) * 100;
+      if (pct >= -100 && pct <= 100) fcfMarginPct = Number(pct.toFixed(2));
+    }
+  }
 
   // Yahoo returns debtToEquity as percentage (e.g. 44.325 => 0.44x)
   const debtToEquity =
     rawDePct !== null && rawDePct >= 0
       ? Number((rawDePct / 100).toFixed(2))
       : catalog?.debtToEquity ?? null;
+
+  const targetMean =
+    rawTargetMean !== null && rawTargetMean > 0 ? Number(rawTargetMean.toFixed(2)) : null;
+  const targetMedian =
+    rawTargetMedian !== null && rawTargetMedian > 0 ? Number(rawTargetMedian.toFixed(2)) : null;
+  const targetHigh =
+    rawTargetHigh !== null && rawTargetHigh > 0 ? Number(rawTargetHigh.toFixed(2)) : null;
+  const targetLow =
+    rawTargetLow !== null && rawTargetLow > 0 ? Number(rawTargetLow.toFixed(2)) : null;
+  const analystCount =
+    rawAnalystCount !== null && rawAnalystCount > 0 ? Math.round(rawAnalystCount) : null;
+  const recommendationMean =
+    rawRecMean !== null && rawRecMean >= 1 && rawRecMean <= 5
+      ? Number(rawRecMean.toFixed(2))
+      : null;
+  const recommendationLabel = normalizeRecommendationLabel(rawRecKey, recommendationMean);
+
+  const analystConsensus: AnalystConsensusSnapshot | null =
+    targetMean !== null || recommendationLabel !== null
+      ? {
+          targetMean,
+          targetMedian,
+          targetHigh,
+          targetLow,
+          analystCount,
+          recommendationKey: rawRecKey,
+          recommendationLabel,
+          recommendationMean,
+        }
+      : null;
 
   const earningsTimestamps = (cal?.earnings?.earningsDate ?? [])
     .map((d) => extractRawNumber(d))
@@ -312,16 +420,21 @@ export async function getLiveFundamentals(symbolInput: string): Promise<LiveFund
     symbol,
     trailingPE,
     forwardPE,
+    priceToBook,
+    evToEbitda: isFinancialSector ? null : evToEbitda,
     roePct,
     roaPct,
     roceProxyPct,
     revenueGrowthPct,
     earningsGrowthPct,
     operatingMarginPct,
+    profitMarginPct,
+    fcfMarginPct,
     debtToEquity,
     nextEarningsDate,
     daysToEarnings,
     earningsRiskFlag,
+    analystConsensus,
     source: hasAnyLiveMetric ? 'live_yahoo' : 'catalog_fallback',
     fetchedAt: new Date().toISOString(),
   };

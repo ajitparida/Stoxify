@@ -249,6 +249,8 @@ export interface SymbolAiOutlook {
   guardrailNote: string;
   confidence?: ConfidenceBreakdown;
   fundamentals?: LiveFundamentalsSnapshot | null;
+  technicalSummary?: TechnicalSummary | null;
+  fairValue?: IntrinsicFairValue | null;
   benchmarkNifty6M: number | null;
   analysisSource: 'gemini' | 'fallback_engine';
   quotaNotice?: string;
@@ -761,22 +763,109 @@ export type PatternId =
   | 'momentum_reset'
   | 'higher_fundamental';
 
+export interface AnalystConsensusSnapshot {
+  targetMean: number | null;
+  targetMedian: number | null;
+  targetHigh: number | null;
+  targetLow: number | null;
+  analystCount: number | null;
+  recommendationKey: string | null;
+  recommendationLabel: 'Strong Buy' | 'Buy' | 'Hold' | 'Underperform' | 'Sell' | null;
+  recommendationMean: number | null;
+}
+
 export interface LiveFundamentalsSnapshot {
   symbol: string;
   trailingPE: number | null;
   forwardPE: number | null;
+  priceToBook?: number | null;
+  evToEbitda?: number | null;
   roePct: number | null;
   roaPct: number | null;
   roceProxyPct: number | null;
   revenueGrowthPct: number | null;
   earningsGrowthPct: number | null;
   operatingMarginPct: number | null;
+  profitMarginPct?: number | null;
+  fcfMarginPct?: number | null;
   debtToEquity: number | null;
   nextEarningsDate: string | null;
   daysToEarnings: number | null;
   earningsRiskFlag: boolean;
+  analystConsensus?: AnalystConsensusSnapshot | null;
   source: 'live_yahoo' | 'catalog_fallback';
   fetchedAt: string;
+}
+
+export type TechnicalSignalVote = 'Buy' | 'Neutral' | 'Sell';
+export type TechnicalSummaryRating =
+  | 'Strong Buy'
+  | 'Buy'
+  | 'Neutral'
+  | 'Sell'
+  | 'Strong Sell';
+
+export interface TechnicalIndicatorReading {
+  name: string;
+  value: string;
+  signal: TechnicalSignalVote;
+}
+
+export interface TechnicalTimeframeSummary {
+  rating: TechnicalSummaryRating;
+  buyCount: number;
+  neutralCount: number;
+  sellCount: number;
+  movingAverages: {
+    rating: TechnicalSummaryRating;
+    buyCount: number;
+    neutralCount: number;
+    sellCount: number;
+    items: TechnicalIndicatorReading[];
+  };
+  oscillators: {
+    rating: TechnicalSummaryRating;
+    buyCount: number;
+    neutralCount: number;
+    sellCount: number;
+    items: TechnicalIndicatorReading[];
+  };
+}
+
+export interface PivotPointsSnapshot {
+  pivot: number;
+  r1: number;
+  r2: number;
+  r3: number;
+  s1: number;
+  s2: number;
+  s3: number;
+  basisDate: string;
+}
+
+export interface TechnicalSummary extends TechnicalTimeframeSummary {
+  weekly?: TechnicalTimeframeSummary | null;
+  pivots?: PivotPointsSnapshot | null;
+  computedAt: string;
+}
+
+export interface ValuationModelPoint {
+  name: string;
+  value: number;
+  weightPct: number;
+  basis: string;
+}
+
+export interface IntrinsicFairValue {
+  fairValue: number;
+  lowEstimate: number;
+  highEstimate: number;
+  upsidePercent: number;
+  verdict: 'Undervalued' | 'Fairly Valued' | 'Overvalued';
+  uncertainty: 'Low' | 'Medium' | 'High';
+  sectorMedianPE: number | null;
+  models: ValuationModelPoint[];
+  basisNote: string;
 }
 
 export interface ConfidencePillarDetail {

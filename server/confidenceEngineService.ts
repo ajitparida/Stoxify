@@ -116,6 +116,7 @@ export interface ConfidenceInput {
     revenueGrowthPct?: number | null;
     earningsGrowthPct?: number | null;
     operatingMarginPct?: number | null;
+    fcfMarginPct?: number | null;
     debtToEquity?: number | null;
   } | null;
 }
@@ -328,6 +329,30 @@ export function computeConfidenceBreakdown(input: ConfidenceInput): ConfidenceBr
       fundNotes.push(`High D/E ${de.toFixed(2)}x`);
     } else if (de > 1.2) {
       fundScore -= 5;
+    }
+  }
+
+  const opMargin = f?.operatingMarginPct ?? null;
+  if (!isFinancialSector && opMargin !== null) {
+    if (opMargin >= 20) {
+      fundScore += 4;
+      fundNotes.push(`OpM ${opMargin.toFixed(0)}%`);
+    } else if (opMargin >= 12) {
+      fundScore += 2;
+    } else if (opMargin < 5) {
+      fundScore -= 5;
+      fundNotes.push(`Thin OpM ${opMargin.toFixed(1)}%`);
+    }
+  }
+
+  const fcfMargin = f?.fcfMarginPct ?? null;
+  if (!isFinancialSector && fcfMargin !== null) {
+    if (fcfMargin >= 10) {
+      fundScore += 4;
+      fundNotes.push(`FCF ${fcfMargin.toFixed(0)}%`);
+    } else if (fcfMargin < -5) {
+      fundScore -= 6;
+      fundNotes.push(`Neg FCF ${fcfMargin.toFixed(0)}%`);
     }
   }
 
@@ -635,6 +660,7 @@ export async function getEnrichedScreenerUniverse(): Promise<MarketQuote[]> {
         revenueGrowthPct: merged.revenueGrowthPct,
         earningsGrowthPct: merged.earningsGrowthPct,
         operatingMarginPct: merged.operatingMarginPct,
+        fcfMarginPct: fund?.fcfMarginPct ?? null,
         debtToEquity: merged.debtToEquity,
       },
     });
@@ -1003,6 +1029,7 @@ export async function getEnrichedResearchSignals(): Promise<LiveResearchSignal[]
         revenueGrowthPct: mergedQuote.revenueGrowthPct,
         earningsGrowthPct: mergedQuote.earningsGrowthPct,
         operatingMarginPct: mergedQuote.operatingMarginPct,
+        fcfMarginPct: fund?.fcfMarginPct ?? null,
         debtToEquity: mergedQuote.debtToEquity,
       },
     });

@@ -1,11 +1,15 @@
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
-import { getQuotes, resolveActiveMarketSymbol } from './marketService.ts';
+import { getChart, getQuotes, resolveActiveMarketSymbol } from './marketService.ts';
 import {
   getLiveFundamentals,
   getLiveFundamentalsBatch,
   mergeQuoteWithFundamentals,
 } from './fundamentalsService.ts';
 import { computeConfidenceBreakdown } from './confidenceEngineService.ts';
+import {
+  computeIntrinsicFairValue,
+  computeTechnicalSummaryFromCandles,
+} from './valuationAndTechnicals.ts';
 import type {
   ConfidenceBreakdown,
   HoldingAiRating,
@@ -150,22 +154,25 @@ function buildStockProjection(
         ? 11.2
         : 8.0
       : 11.5;
-  const pePenalty = t.peRatio !== null && t.peRatio > 60 ? -1.8 : t.peRatio !== null && t.peRatio < 18 ? 1.0 : 0;
+  const pePenalty =
+    t.peRatio !== null && t.peRatio > 60 ? -1.8 : t.peRatio !== null && t.peRatio < 18 ? 1.0 : 0;
   const ratingBias = rating === 'BUY' ? 2.0 : rating === 'EXIT' ? -4.0 : 0;
 
-  const base6m = clampNum(targetUpsidePct * 0.75 + (t.return6M ?? 0) * 0.12, -18, 28);
-  const base1y = clampNum(base6m * 1.45 + momAdj + ratingBias * 0.6, -22, 42);
+  // Anchor Next 1Y Est. directly to the guardrailed 1Y AI Target so both figures always match 100%
+  const final1y = Number(targetUpsidePct.toFixed(1));
+  const halfYearComp = (Math.pow(Math.max(0.45, 1 + final1y / 100), 0.5) - 1) * 100;
+  const base6m = clampNum(halfYearComp + (t.return6M ?? 0) * 0.05 + momAdj * 0.25, -18, 28);
+  const raw6m =
+    typeof aiHint?.p6m === 'number' && Number.isFinite(aiHint.p6m)
+      ? aiHint.p6m * 0.35 + base6m * 0.65
+      : base6m;
+  const r6m =
+    final1y >= 0
+      ? clampNum(raw6m, Math.max(-4, final1y * 0.25), Math.max(0.5, final1y * 0.85))
+      : clampNum(raw6m, final1y * 0.9, Math.min(2, final1y * 0.25));
+
   const base5yCagr = clampNum(roceScore + pePenalty + ratingBias * 0.65, 4, 22);
   const base10yCagr = clampNum(base5yCagr * 0.72 + 12.0 * 0.28, 5, 18.5);
-
-  const r6m =
-    typeof aiHint?.p6m === 'number' && Number.isFinite(aiHint.p6m)
-      ? clampNum(aiHint.p6m * 0.55 + base6m * 0.45, -18, 28)
-      : base6m;
-  const r1y =
-    typeof aiHint?.p1y === 'number' && Number.isFinite(aiHint.p1y)
-      ? clampNum(aiHint.p1y * 0.55 + base1y * 0.45, -22, 42)
-      : base1y;
   const c5y =
     typeof aiHint?.cagr5y === 'number' && Number.isFinite(aiHint.cagr5y)
       ? clampNum(aiHint.cagr5y * 0.5 + base5yCagr * 0.5, 4, 22)
@@ -178,24 +185,30 @@ function buildStockProjection(
   const comp1m = (Math.pow(Math.max(0.5, 1 + r6m / 100), 1 / 6) - 1) * 100;
   const comp3m = (Math.pow(Math.max(0.5, 1 + r6m / 100), 0.5) - 1) * 100;
   const rsiVal = t.rsi14 ?? 50;
-  const rsi1mNudge =
-    rsiVal >= 74 ? -1.1 : rsiVal <= 35 && rating !== 'EXIT' ? 1.1 : 0;
-  const mom1mNudge = clampNum((t.return1M ?? 0) * 0.08, -2.2, 2.2);
-  const mom3mNudge = clampNum((t.return3M ?? 0) * 0.08, -3.0, 3.0);
+  const rsi1mNudge = rsiVal >= 74 ? -1.0 : rsiVal <= 35 && rating !== 'EXIT' ? 1.0 : 0;
+  const mom1mNudge = clampNum((t.return1M ?? 0) * 0.06, -1.8, 1.8);
+  const mom3mNudge = clampNum((t.return3M ?? 0) * 0.06, -2.4, 2.4);
 
-  const base1m = clampNum(comp1m + rsi1mNudge + mom1mNudge, -9, 12);
-  const base3m = clampNum(comp3m + mom3mNudge, -14, 19);
+  const base1m = clampNum(comp1m + rsi1mNudge + mom1mNudge, -9, 10);
+  const base3m = clampNum(comp3m + mom3mNudge, -14, 16);
 
-  const r1m =
+  const raw1m =
     typeof aiHint?.p1m === 'number' && Number.isFinite(aiHint.p1m)
-      ? clampNum(aiHint.p1m * 0.5 + base1m * 0.5, -9, 12)
+      ? clampNum(aiHint.p1m * 0.4 + base1m * 0.6, -9, 10)
       : base1m;
-  const r3m =
+  const raw3m =
     typeof aiHint?.p3m === 'number' && Number.isFinite(aiHint.p3m)
-      ? clampNum(aiHint.p3m * 0.5 + base3m * 0.5, -14, 19)
+      ? clampNum(aiHint.p3m * 0.4 + base3m * 0.6, -14, 16)
       : base3m;
 
-  const final1y = clampNum(r1y, Math.max(-22, r6m - 8), 42 * Math.min(1.15, beta * 0.95 + 0.15));
+  const r3m =
+    r6m >= 0
+      ? clampNum(raw3m, Math.min(raw3m, r6m * 0.85), Math.max(0.5, r6m * 0.85))
+      : clampNum(raw3m, r6m * 0.85, Math.max(raw3m, r6m * 0.25));
+  const r1m =
+    r3m >= 0
+      ? clampNum(raw1m, -4, Math.max(0.4, r3m * 0.78))
+      : clampNum(raw1m, Math.min(-0.4, r3m * 0.8), 3);
 
   return {
     return1MPercent: Number(r1m.toFixed(1)),
@@ -204,16 +217,16 @@ function buildStockProjection(
     value3M: Number((live * (1 + r3m / 100)).toFixed(2)),
     return6MPercent: Number(r6m.toFixed(1)),
     value6M: Number((live * (1 + r6m / 100)).toFixed(2)),
-    return1YPercent: Number(final1y.toFixed(1)),
-    value1Y: Number((live * (1 + final1y / 100)).toFixed(2)),
+    return1YPercent: final1y,
+    value1Y: Number(suggestedTarget.toFixed(2)),
     cagr5YPercent: Number(c5y.toFixed(1)),
     value5Y: Number((live * Math.pow(1 + c5y / 100, 5)).toFixed(2)),
     cagr10YPercent: Number(c10y.toFixed(1)),
     value10Y: Number((live * Math.pow(1 + c10y / 100, 10)).toFixed(2)),
     basisNote:
       t.roce !== null
-        ? `Anchored to live ₹${live.toFixed(0)}, ROCE ${t.roce.toFixed(1)}%, β ${beta.toFixed(2)}x & DMA momentum.`
-        : `Anchored to live ₹${live.toFixed(0)}, β ${beta.toFixed(2)}x & 50/200-DMA momentum.`,
+        ? `Anchored to 1Y target ₹${suggestedTarget.toFixed(0)}, ROCE ${t.roce.toFixed(1)}%, β ${beta.toFixed(2)}x & DMA momentum.`
+        : `Anchored to 1Y target ₹${suggestedTarget.toFixed(0)}, β ${beta.toFixed(2)}x & 50/200-DMA momentum.`,
   };
 }
 
@@ -843,6 +856,7 @@ export async function analyzePortfolioHoldings(
         revenueGrowthPct: fund?.revenueGrowthPct ?? null,
         earningsGrowthPct: fund?.earningsGrowthPct ?? null,
         operatingMarginPct: fund?.operatingMarginPct ?? null,
+        fcfMarginPct: fund?.fcfMarginPct ?? null,
         debtToEquity: fund?.debtToEquity ?? q?.debtToEquity ?? null,
       },
     });
@@ -1027,9 +1041,10 @@ export async function analyzeSingleSymbolOutlook(
   }
 
   const fetchList = Array.from(new Set(['^NSEI', symbol]));
-  const [quotes, liveFundamentals] = await Promise.all([
+  const [quotes, liveFundamentals, chart1Y] = await Promise.all([
     getQuotes(fetchList),
     symbol.startsWith('^') ? Promise.resolve(null) : getLiveFundamentals(symbol),
+    getChart(symbol, '1y').catch(() => null),
   ]);
   const rawQuote = quotes[symbol];
   const quote = rawQuote ? mergeQuoteWithFundamentals(rawQuote, liveFundamentals) : undefined;
@@ -1038,6 +1053,19 @@ export async function analyzeSingleSymbolOutlook(
   if (!quote || quote.price <= 0) {
     throw new Error(`No live market quote available for ${symbol}.`);
   }
+
+  const technicalSummary = computeTechnicalSummaryFromCandles(
+    chart1Y?.candles ?? [],
+    quote.price
+  );
+  const fairValue = computeIntrinsicFairValue({
+    symbol,
+    sector: quote.sector || 'Equities',
+    livePrice: quote.price,
+    peRatio: quote.peRatio ?? null,
+    roce: quote.roce ?? null,
+    fundamentals: liveFundamentals,
+  });
 
   const confidence = computeConfidenceBreakdown({
     price: quote.price,
@@ -1069,6 +1097,7 @@ export async function analyzeSingleSymbolOutlook(
           revenueGrowthPct: liveFundamentals.revenueGrowthPct,
           earningsGrowthPct: liveFundamentals.earningsGrowthPct,
           operatingMarginPct: liveFundamentals.operatingMarginPct,
+          fcfMarginPct: liveFundamentals.fcfMarginPct ?? null,
           debtToEquity: liveFundamentals.debtToEquity,
         }
       : {
@@ -1279,6 +1308,8 @@ Data: ${JSON.stringify(compactPayload)}`;
     guardrailNote: guarded.guardrailNote ?? 'Verified against live quote telemetry.',
     confidence,
     fundamentals: liveFundamentals,
+    technicalSummary,
+    fairValue,
     benchmarkNifty6M: nifty?.return6M ?? null,
     analysisSource: usedFallback ? 'fallback_engine' : 'gemini',
     quotaNotice: usedFallback ? QUOTA_EXHAUSTED_NOTICE : undefined,
