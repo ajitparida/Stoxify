@@ -29,6 +29,8 @@ import type {
   AlgoStrategyDraft,
   AlgoStrategyRecord,
   AlgoStrategyStatus,
+  BacktestRunFirestoreRecord,
+  BacktestRunResult,
   Exchange,
   HoldingRecord,
   HoldingSource,
@@ -917,5 +919,111 @@ export async function batchDeleteAlgoOrders(userId: string, orderIds: string[]):
     }
   }
 }
+
+export function subscribeBacktestRuns(
+  userId: string,
+  onData: (items: BacktestRunFirestoreRecord[]) => void,
+  onError: (err: Error) => void
+): Unsubscribe {
+  const path = `users/${userId}/backtestRuns`;
+  const q = query(collection(db, 'users', userId, 'backtestRuns'), where('userId', '==', userId));
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const items: BacktestRunFirestoreRecord[] = snapshot.docs
+        .map((d) => d.data() as BacktestRunFirestoreRecord)
+        .sort((a, b) => (b.computedAt || '').localeCompare(a.computedAt || ''));
+      onData(items);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, path);
+      } catch (wrapped) {
+        onError(wrapped as Error);
+      }
+    }
+  );
+}
+
+export async function saveBacktestRun(
+  userId: string,
+  run: BacktestRunResult
+): Promise<string> {
+  const runId = sanitizeId(
+    run.runId || `bt_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+  );
+  const path = `users/${userId}/backtestRuns/${runId}`;
+
+  const symbols = Array.from(
+    new Set(
+      (run.symbolsEvaluated.length > 0 ? run.symbolsEvaluated : run.symbolsRequested)
+        .map((s) => sanitizeSymbol(s))
+        .filter((s) => s.length >= 1 && s.length <= 32)
+    )
+  ).slice(0, 30);
+  if (symbols.length === 0) symbols.push('RELIANCE.NS');
+
+  const fallbackCal = run.calibrationByHorizon['63'] ?? Object.values(run.calibrationByHorizon)[0];
+  const cal1Y = run.calibrationByHorizon['252'] ?? fallbackCal;
+
+  // Compact bounded snapshot well below Firestore's 1MB document limit
+  const recentSignals = run.signals.slice(0, 120).map((s) => ({
+    ...s,
+    outcomes: {
+      '21': s.outcomes['21'],
+      '63': s.outcomes['63'],
+      '126': s.outcomes['126'],
+      '252': s.outcomes['252'],
+    },
+  }));
+
+  const payload = {
+    id: runId,
+    userId,
+    label: sanitizeText(run.label, 120, '10Y Backtest Snapshot'),
+    methodology: 'TECH_RECONSTRUCTED_V1' as const,
+    universeMode: (['portfolio_plus_flagship', 'flagship', 'portfolio_only'] as const).includes(
+      run.universeMode
+    )
+      ? run.universeMode
+      : 'portfolio_plus_flagship',
+    samplingFrequency: (['monthly', 'biweekly', 'weekly'] as const).includes(run.samplingFrequency)
+      ? run.samplingFrequency
+      : 'monthly',
+    costBps: clampAlgoNum(run.costBps, 0, 100, 1),
+    trainCutoffDate: sanitizeDate(run.trainCutoffDate),
+    symbols,
+    portfolioMetrics: run.portfolioMetrics,
+    horizonSummaries: run.horizonSummaries.slice(0, 6),
+    calibration3M: fallbackCal,
+    calibration1Y: cal1Y,
+    stockScorecards: run.stockScorecards.slice(0, 30),
+    equityCurve: run.equityCurve.slice(-140),
+    recentSignals,
+    totalSignalsGenerated: Math.round(clampAlgoNum(run.totalSignalsGenerated, 0, 200000, 0)),
+    dataQuality: run.dataQuality.slice(0, 30),
+    computedAt: sanitizeText(run.computedAt || new Date().toISOString(), 40),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(doc(db, 'users', userId, 'backtestRuns', runId), payload);
+    return runId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteBacktestRun(userId: string, runId: string): Promise<void> {
+  const path = `users/${userId}/backtestRuns/${runId}`;
+  try {
+    await deleteDoc(doc(db, 'users', userId, 'backtestRuns', runId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
 
 

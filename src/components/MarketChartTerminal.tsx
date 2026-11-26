@@ -71,6 +71,7 @@ interface MarketChartTerminalProps {
   portfolioRating?: HoldingAiRating | null;
   portfolioAnalysisMeta?: PortfolioAnalysisMeta | null;
   onOutlookUpdated?: (outlook: SymbolAiOutlook) => void;
+  onInspectBacktest?: (symbol: string) => void;
 }
 
 const RANGES: Array<{ key: ChartRange; label: string }> = [
@@ -95,6 +96,7 @@ export function MarketChartTerminal({
   portfolioRating = null,
   portfolioAnalysisMeta = null,
   onOutlookUpdated,
+  onInspectBacktest,
 }: MarketChartTerminalProps) {
   const [range, setRange] = useState<ChartRange>('6mo');
   const [chartData, setChartData] = useState<ChartResponse | null>(null);
@@ -256,6 +258,7 @@ export function MarketChartTerminal({
           fundamentals: portfolioRating.fundamentals ?? null,
           technicalSummary: matchingFetchedOutlook?.technicalSummary ?? null,
           fairValue: matchingFetchedOutlook?.fairValue ?? null,
+          calibration: portfolioRating.calibration ?? matchingFetchedOutlook?.calibration ?? null,
           benchmarkNifty6M: portfolioAnalysisMeta?.benchmarkNifty6M ?? null,
           analysisSource: portfolioAnalysisMeta?.analysisSource ?? 'gemini',
           quotaNotice: portfolioAnalysisMeta?.quotaNotice,
@@ -1090,6 +1093,66 @@ export function MarketChartTerminal({
                   <span className="font-semibold text-slate-700">Key Risk: </span>
                   {outlook.keyRisk}
                 </div>
+                {outlook.calibration && (
+                  <div className="pt-2.5 mt-1 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-slate-600">
+                      <span className="font-semibold text-slate-800">10Y Empirical Calibration:</span>
+                      {outlook.calibration.calibratedWinProb3M !== null && (
+                        <span className="font-mono-tabular">
+                          3M Calibrated Odds{' '}
+                          <span className="font-bold text-blue-700">
+                            {outlook.calibration.calibratedWinProb3M.toFixed(0)}%
+                          </span>
+                          <span className="text-slate-400">
+                            {' '}
+                            (bucket {outlook.calibration.rawConfidenceBucket}, n=
+                            {outlook.calibration.oosSampleCount} OOS)
+                          </span>
+                        </span>
+                      )}
+                      {outlook.calibration.stockEdgeTier && (
+                        <>
+                          <span className="text-slate-300">·</span>
+                          <span>
+                            Stock Edge{' '}
+                            <span
+                              className={`font-semibold ${
+                                outlook.calibration.stockEdgeTier === 'Strong'
+                                  ? 'text-green-700'
+                                  : outlook.calibration.stockEdgeTier === 'Moderate'
+                                  ? 'text-blue-700'
+                                  : outlook.calibration.stockEdgeTier === 'Weak'
+                                  ? 'text-red-700'
+                                  : 'text-slate-700'
+                              }`}
+                            >
+                              {outlook.calibration.stockEdgeTier}
+                            </span>
+                            {outlook.calibration.stockExcessReturn3M !== null && (
+                              <span className="font-mono-tabular text-slate-500">
+                                {' '}
+                                ({formatPercent(outlook.calibration.stockExcessReturn3M)} vs Nifty
+                                {outlook.calibration.stockProfitFactor !== null
+                                  ? `, PF ${outlook.calibration.stockProfitFactor.toFixed(2)}x`
+                                  : ''}
+                                )
+                              </span>
+                            )}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    {onInspectBacktest && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectBacktest(outlook.symbol)}
+                        className="font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0"
+                      >
+                        10Y Signal Audit →
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="p-4 bg-white border border-slate-200 rounded-lg flex flex-col justify-between gap-3">

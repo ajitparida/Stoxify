@@ -35,11 +35,18 @@ import {
   evaluateLivePaperStrategies,
   runHistoricalBacktest,
 } from './algoEngineService.ts';
+import {
+  ensureBaselineBacktest,
+  getLiveCalibrationForSymbol,
+  run10YearBacktest,
+  runDeterministicValidationSuite,
+} from './historicalBacktestService.ts';
 import type {
   AlgoOrderRecord,
   AlgoStrategyDraft,
   AlgoStrategyRecord,
   AnalyzedMutualFund,
+  BacktestRunRequest,
   ChartRange,
   MutualFundHoldingRecord,
   MutualFundSummaryMetrics,
@@ -449,6 +456,87 @@ export function createApiApp(): Express {
         error: formatRouteError(error, 'Failed to generate AI switch strategy.'),
       });
     }
+  });
+
+  app.post('/api/backtest/run', async (req, res) => {
+    try {
+      const body = (req.body ?? {}) as BacktestRunRequest;
+      const validUniverse = new Set(['portfolio_plus_flagship', 'flagship', 'portfolio_only']);
+      const validFreq = new Set(['monthly', 'biweekly', 'weekly']);
+      const payload: BacktestRunRequest = {
+        universeMode:
+          body.universeMode && validUniverse.has(body.universeMode)
+            ? body.universeMode
+            : 'portfolio_plus_flagship',
+        portfolioSymbols: Array.isArray(body.portfolioSymbols)
+          ? body.portfolioSymbols.map((s) => String(s)).slice(0, 30)
+          : [],
+        customSymbols: Array.isArray(body.customSymbols)
+          ? body.customSymbols.map((s) => String(s)).slice(0, 30)
+          : [],
+        costBps:
+          typeof body.costBps === 'number' && Number.isFinite(body.costBps)
+            ? Math.max(0, Math.min(100, body.costBps))
+            : 15,
+        samplingFrequency:
+          body.samplingFrequency && validFreq.has(body.samplingFrequency)
+            ? body.samplingFrequency
+            : 'monthly',
+        maxConcurrentPositions:
+          typeof body.maxConcurrentPositions === 'number' &&
+          Number.isFinite(body.maxConcurrentPositions)
+            ? Math.max(3, Math.min(20, Math.round(body.maxConcurrentPositions)))
+            : 10,
+      };
+      const result = await run10YearBacktest(payload);
+      res.json(result);
+    } catch (error) {
+      console.error('10Y backtest run endpoint error:', error);
+      res.status(500).json({
+        error: formatRouteError(error, 'Failed to run 10-year historical backtest.'),
+      });
+    }
+  });
+
+  app.get('/api/backtest/baseline', async (_req, res) => {
+    try {
+      const result = await ensureBaselineBacktest();
+      if (!result) {
+        res.status(503).json({ error: 'Unable to compute flagship 10-year baseline backtest.' });
+        return;
+      }
+      res.json(result);
+    } catch (error) {
+      console.error('10Y baseline endpoint error:', error);
+      res.status(500).json({
+        error: formatRouteError(error, 'Failed to load baseline 10-year backtest.'),
+      });
+    }
+  });
+
+  app.get('/api/backtest/calibration/:symbol', async (req, res) => {
+    try {
+      const symbol = decodeURIComponent(req.params.symbol || '').trim();
+      if (!symbol) {
+        res.status(400).json({ error: 'A valid stock symbol is required.' });
+        return;
+      }
+      const rawConf = Number(req.query.confidence ?? 65);
+      const calibration = await getLiveCalibrationForSymbol({
+        symbol,
+        rawConfidence: Number.isFinite(rawConf) ? rawConf : 65,
+        waitMs: 12_000,
+      });
+      res.json({ calibration });
+    } catch (error) {
+      console.error('Calibration lookup error:', error);
+      res.status(500).json({ error: 'Failed to retrieve historical calibration.' });
+    }
+  });
+
+  app.get('/api/backtest/self-test', (_req, res) => {
+    const report = runDeterministicValidationSuite();
+    res.json(report);
   });
 
   app.use('/api', (_req, res) => {

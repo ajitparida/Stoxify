@@ -1,0 +1,1003 @@
+# Historical Backtesting Engine — Technical Design & Implementation Specification
+
+**Version:** 1.0  
+**Scope:** 17 Indian stocks  
+**Historical period:** 10 years  
+**Data provider:** Yahoo Finance  
+**Technology:** React, Spring Boot, PostgreSQL, Python  
+**Architecture:** Modular analytics service + REST API
+
+---
+
+## 1. Repository structure
+
+```text
+stock-analysis/
+├── backend/
+│   ├── src/main/java/com/stockanalysis/
+│   │   ├── backtesting/
+│   │   │   ├── controller/
+│   │   │   ├── service/
+│   │   │   ├── repository/
+│   │   │   ├── entity/
+│   │   │   ├── dto/
+│   │   │   └── scheduler/
+│   │   └── calibration/
+│   └── src/main/resources/db/migration/
+│       ├── V101__create_stock_instruments.sql
+│       ├── V102__create_historical_prices.sql
+│       ├── V103__create_indicator_snapshots.sql
+│       ├── V104__create_backtest_runs.sql
+│       ├── V105__create_prediction_snapshots.sql
+│       ├── V106__create_prediction_outcomes.sql
+│       ├── V107__create_calibration_results.sql
+│       └── V108__create_benchmark_returns.sql
+│
+├── analytics/
+│   ├── requirements.txt
+│   ├── pyproject.toml
+│   ├── config/
+│   │   ├── stocks.yaml
+│   │   ├── indicators.yaml
+│   │   └── scoring.yaml
+│   ├── src/backtesting/
+│   │   ├── data/
+│   │   │   ├── yahoo_client.py
+│   │   │   ├── historical_loader.py
+│   │   │   ├── data_validator.py
+│   │   │   └── corporate_actions.py
+│   │   ├── indicators/
+│   │   │   ├── moving_averages.py
+│   │   │   ├── rsi.py
+│   │   │   ├── momentum.py
+│   │   │   ├── volatility.py
+│   │   │   └── indicator_engine.py
+│   │   ├── signals/
+│   │   │   ├── historical_reconstructor.py
+│   │   │   ├── scoring_engine.py
+│   │   │   └── target_calculator.py
+│   │   ├── engine/
+│   │   │   ├── signal_executor.py
+│   │   │   ├── outcome_evaluator.py
+│   │   │   ├── portfolio_simulator.py
+│   │   │   └── benchmark_engine.py
+│   │   ├── calibration/
+│   │   │   ├── probability_calibrator.py
+│   │   │   ├── brier_score.py
+│   │   │   ├── reliability_curve.py
+│   │   │   └── calibration_report.py
+│   │   ├── reports/
+│   │   │   ├── stock_report.py
+│   │   │   └── portfolio_report.py
+│   │   └── cli.py
+│   └── tests/
+│       ├── unit/
+│       ├── integration/
+│       └── fixtures/
+│
+├── frontend/
+│   └── src/features/backtesting/
+│       ├── pages/
+│       │   ├── BacktestingOverview.jsx
+│       │   ├── StockBacktesting.jsx
+│       │   ├── ConfidenceCalibration.jsx
+│       │   ├── HistoricalSignals.jsx
+│       │   └── RiskAnalysis.jsx
+│       ├── components/
+│       ├── services/
+│       └── hooks/
+│
+└── docs/
+    ├── BACKTESTING_ARCHITECTURE.md
+    ├── DATA_DICTIONARY.md
+    ├── SCORING_METHODOLOGY.md
+    └── BACKTEST_VALIDATION.md
+```
+
+Do not replace or restructure existing application modules unnecessarily.
+
+## 2. PostgreSQL database design
+
+Use Flyway migrations, following your existing migration numbering convention.
+
+### V101 — Stock instruments
+
+```sql
+CREATE TABLE stock_instruments (
+    id BIGSERIAL PRIMARY KEY,
+    company_name VARCHAR(150) NOT NULL,
+    canonical_symbol VARCHAR(30) UNIQUE NOT NULL,
+    exchange VARCHAR(10) NOT NULL,
+    yahoo_symbol VARCHAR(50),
+    listing_date DATE,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE instrument_symbol_history (
+    id BIGSERIAL PRIMARY KEY,
+    instrument_id BIGINT REFERENCES stock_instruments(id),
+    yahoo_symbol VARCHAR(50) NOT NULL,
+    valid_from DATE NOT NULL,
+    valid_to DATE,
+    UNIQUE(instrument_id, valid_from)
+);
+```
+
+### V102 — Historical prices
+
+```sql
+CREATE TABLE historical_prices (
+    id BIGSERIAL PRIMARY KEY,
+    instrument_id BIGINT NOT NULL
+        REFERENCES stock_instruments(id),
+
+    trading_date DATE NOT NULL,
+
+    open_price NUMERIC(18,6),
+    high_price NUMERIC(18,6),
+    low_price NUMERIC(18,6),
+    close_price NUMERIC(18,6),
+    adjusted_close NUMERIC(18,6),
+    volume BIGINT,
+
+    data_source VARCHAR(30) DEFAULT 'YAHOO',
+    fetched_at TIMESTAMP DEFAULT NOW(),
+
+    UNIQUE(instrument_id, trading_date)
+);
+
+CREATE INDEX idx_prices_symbol_date
+ON historical_prices(instrument_id, trading_date);
+```
+
+Maintain raw provider values and a separately validated, normalized price series. Do not overwrite original observations when correcting corporate-action handling.
+
+### V103 — Indicator snapshots
+
+```sql
+CREATE TABLE indicator_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+    instrument_id BIGINT NOT NULL,
+    trading_date DATE NOT NULL,
+
+    sma_20 NUMERIC(18,6),
+    sma_50 NUMERIC(18,6),
+    sma_200 NUMERIC(18,6),
+
+    ema_20 NUMERIC(18,6),
+    rsi_14 NUMERIC(10,4),
+
+    momentum_1m NUMERIC(12,4),
+    momentum_3m NUMERIC(12,4),
+    momentum_6m NUMERIC(12,4),
+
+    volatility_30d NUMERIC(12,6),
+
+    calculation_version VARCHAR(30) NOT NULL,
+
+    UNIQUE(instrument_id, trading_date, calculation_version)
+);
+```
+
+### V104 — Backtest runs
+
+```sql
+CREATE TABLE backtest_runs (
+    id UUID PRIMARY KEY,
+    run_name VARCHAR(150),
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+
+    algorithm_version VARCHAR(30),
+    data_version VARCHAR(30),
+
+    status VARCHAR(20) NOT NULL,
+    total_stocks INTEGER DEFAULT 17,
+
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+Statuses: QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED.
+
+### V105 — Prediction snapshots
+
+```sql
+CREATE TABLE prediction_snapshots (
+    id BIGSERIAL PRIMARY KEY,
+
+    run_id UUID REFERENCES backtest_runs(id),
+    instrument_id BIGINT NOT NULL,
+
+    signal_date DATE NOT NULL,
+    entry_date DATE,
+
+    signal VARCHAR(10) NOT NULL,
+
+    entry_price NUMERIC(18,6),
+    confidence_score NUMERIC(6,3),
+
+    trend_score NUMERIC(6,3),
+    momentum_score NUMERIC(6,3),
+    relative_strength_score NUMERIC(6,3),
+    fundamental_score NUMERIC(6,3),
+
+    target_price NUMERIC(18,6),
+    stop_loss NUMERIC(18,6),
+
+    scoring_version VARCHAR(30),
+    scoring_inputs JSONB,
+
+    data_cutoff_timestamp TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_predictions_stock_date
+ON prediction_snapshots(instrument_id, signal_date);
+```
+
+Store all scoring inputs, thresholds, weights, target calculation parameters and missing-data flags. Prediction records must be immutable after generation.
+
+### V106 — Prediction outcomes
+
+```sql
+CREATE TABLE prediction_outcomes (
+    id BIGSERIAL PRIMARY KEY,
+
+    prediction_id BIGINT NOT NULL
+        REFERENCES prediction_snapshots(id),
+
+    horizon_days INTEGER NOT NULL,
+
+    outcome_status VARCHAR(30),
+
+    target_hit BOOLEAN,
+    stop_hit BOOLEAN,
+
+    first_hit VARCHAR(20),
+    target_hit_date DATE,
+    stop_hit_date DATE,
+
+    exit_price NUMERIC(18,6),
+    gross_return NUMERIC(12,6),
+    net_return NUMERIC(12,6),
+
+    benchmark_return NUMERIC(12,6),
+    excess_return NUMERIC(12,6),
+
+    max_drawdown NUMERIC(12,6),
+
+    evaluated_at TIMESTAMP,
+
+    UNIQUE(prediction_id, horizon_days)
+);
+```
+
+Possible statuses:
+
+- PENDING
+- TARGET_HIT
+- STOP_HIT
+- HORIZON_EXPIRED
+- BOTH_SAME_BAR
+- DATA_UNAVAILABLE
+- INVALID_SIGNAL
+
+Use an explicit `first_hit` convention. If both target and stop occur on the same daily candle, classify the result as STOP_FIRST unless intraday evidence establishes the sequence.
+
+### V107 — Calibration results
+
+```sql
+CREATE TABLE calibration_results (
+    id BIGSERIAL PRIMARY KEY,
+
+    run_id UUID REFERENCES backtest_runs(id),
+
+    horizon_days INTEGER NOT NULL,
+    confidence_bucket VARCHAR(20),
+
+    sample_count INTEGER,
+    predicted_probability NUMERIC(8,6),
+    actual_success_rate NUMERIC(8,6),
+
+    brier_score NUMERIC(12,8),
+    calibration_error NUMERIC(8,6),
+
+    created_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### V108 — Benchmark returns
+
+```sql
+CREATE TABLE benchmark_returns (
+    id BIGSERIAL PRIMARY KEY,
+    benchmark_symbol VARCHAR(30) NOT NULL,
+    trading_date DATE NOT NULL,
+
+    open_price NUMERIC(18,6),
+    high_price NUMERIC(18,6),
+    low_price NUMERIC(18,6),
+    close_price NUMERIC(18,6),
+
+    data_source VARCHAR(30),
+
+    UNIQUE(benchmark_symbol, trading_date)
+);
+```
+
+For production, also add ingestion-job history, data-quality issues, model configuration history and a separate point-in-time fundamentals table.
+
+## 3. Python implementation specification
+
+### Dependencies
+
+Suggested initial dependencies:
+
+```text
+yfinance
+pandas
+numpy
+pandas-ta
+scikit-learn
+scipy
+sqlalchemy
+psycopg
+pydantic
+pyyaml
+pytest
+pytest-cov
+httpx
+```
+
+Pin tested dependency versions in the lockfile. Use Python type hints and Pydantic models for input/output contracts.
+
+### Module responsibilities
+
+| Module | Required functionality |
+|---|---|
+| yahoo_client.py | Download historical Yahoo data |
+| historical_loader.py | Incremental ingestion and retries |
+| data_validator.py | Missing dates, duplicates, OHLC checks |
+| corporate_actions.py | Splits and dividend handling |
+| indicator_engine.py | Calculate all technical indicators |
+| historical_reconstructor.py | Recreate historical signals |
+| scoring_engine.py | Apply versioned scoring rules |
+| target_calculator.py | Calculate historical target and stop |
+| signal_executor.py | Apply entry execution rules |
+| outcome_evaluator.py | Evaluate target, stop and expiry |
+| portfolio_simulator.py | Simulate portfolio returns |
+| benchmark_engine.py | Compare against Nifty |
+| probability_calibrator.py | Calibrate confidence |
+| calibration_report.py | Generate statistics |
+| cli.py | Execute individual pipeline stages |
+
+### Yahoo data ingestion
+
+Use the Yahoo Finance Python client through a dedicated adapter.
+
+Example:
+
+```python
+import yfinance as yf
+
+def download_history(symbol, start, end):
+    ticker = yf.Ticker(symbol)
+
+    data = ticker.history(
+        start=start,
+        end=end,
+        interval="1d",
+        auto_adjust=False,
+        actions=True
+    )
+
+    if data.empty:
+        raise ValueError(
+            f"No historical data for {symbol}"
+        )
+
+    return data
+```
+
+Important implementation requirements:
+
+1. Handle rate limits and transient failures with bounded exponential backoff.
+2. Cache downloaded data.
+3. Persist the retrieval timestamp.
+4. Validate adjusted and unadjusted prices.
+5. Store splits and dividends.
+6. Never silently fill missing prices.
+7. Record provider errors.
+8. Check Yahoo symbol mappings before downloading.
+9. Support incremental downloads.
+10. Respect provider terms and availability limitations.
+
+The data adapter must not assume that every instrument has a full ten-year history.
+
+### Indicator calculations
+
+Use daily historical data.
+
+| Indicator | Calculation |
+|---|---|
+| SMA 20 | 20-session simple moving average |
+| SMA 50 | 50-session simple moving average |
+| SMA 200 | 200-session simple moving average |
+| EMA 20 | 20-session exponential moving average |
+| RSI | RSI(14) |
+| Momentum | 21, 63 and 126-session returns |
+| Volatility | 30-session annualized volatility |
+| Relative strength | Stock return minus Nifty return |
+
+Use a minimum 200-session warm-up period before producing signals.
+
+Relative-strength calculations must use aligned trading dates and consistent adjusted return series.
+
+### Historical signal reconstruction
+
+The reconstruction process must use only information available at the end of the signal date.
+
+```python
+def reconstruct_signal(snapshot, scoring_config):
+
+    if not snapshot.has_required_data:
+        return None
+
+    trend = calculate_trend(snapshot)
+    momentum = calculate_momentum(snapshot)
+    relative_strength = calculate_relative_strength(snapshot)
+
+    technical_score = calculate_technical_score(
+        trend,
+        momentum,
+        relative_strength,
+        scoring_config
+    )
+
+    return generate_signal(
+        technical_score,
+        scoring_config
+    )
+```
+
+The above is an interface illustration, not the complete scoring algorithm.
+
+**Required before implementation:** Recover the exact existing algorithm, including:
+
+- Component weights.
+- Trend thresholds.
+- Momentum thresholds.
+- Fundamental score calculation.
+- Missing-ratio deductions.
+- Confidence formula.
+- BUY/HOLD/SELL thresholds.
+- Target and stop-loss formulas.
+- Beta adjustments and guardrails.
+
+The uploaded dashboard contains outputs, but not these formulas. Do not claim an exact reconstruction until the actual application implementation or configuration has been inspected.
+
+If the original formulas cannot be recovered, create a separately named `RECONSTRUCTED_V1` algorithm. Do not mix its results with the original dashboard's historical scores.
+
+### Entry and exit rules
+
+Use these rules consistently:
+
+1. Generate signals after the historical market close.
+2. Enter at the next trading session's opening price.
+3. Apply realistic execution costs.
+4. Monitor daily high/low for target and stop-loss.
+5. Exit at the first applicable trigger.
+6. If neither is reached, exit at the defined horizon close.
+7. Include dividends and corporate actions in total-return reporting.
+8. Mark incomplete horizons as pending.
+
+### Return calculation
+
+```python
+gross_return = (exit_price - entry_price) / entry_price
+
+net_return = (
+    gross_return
+    - transaction_costs
+    - estimated_slippage
+)
+
+excess_return = net_return - benchmark_return
+```
+
+For long-term investment performance, include reinvested dividends when the selected price series and corporate-action data support it.
+
+Keep price return and total return as separate metrics.
+
+### Confidence calibration
+
+Define the primary calibration event before running any tests.
+
+Recommended primary event:
+
+> A BUY prediction is successful if its net total return is positive at the specified horizon.
+
+Track these separately:
+
+- Target reached first.
+- Stop-loss reached first.
+- Positive return at horizon.
+- Return above Nifty at horizon.
+
+Do not combine these into a single ambiguous win-rate metric.
+
+Calculate:
+
+- Actual win rate.
+- Target hit rate.
+- Stop-loss hit rate.
+- Brier score.
+- Log loss.
+- Expected calibration error.
+- Reliability curve.
+- Confidence intervals.
+- Sample counts.
+
+A score of 85 is not automatically an 85% probability. Calibrate the score on historical training data and test it on unseen observations.
+
+## 4. Backtesting execution workflow
+
+Run the stages in this order:
+
+```text
+1. LOAD_STOCK_UNIVERSE
+2. DOWNLOAD_HISTORICAL_DATA
+3. VALIDATE_PRICE_DATA
+4. LOAD_CORPORATE_ACTIONS
+5. DOWNLOAD_NIFTY_DATA
+6. CALCULATE_INDICATORS
+7. RECONSTRUCT_HISTORICAL_SIGNALS
+8. GENERATE_PREDICTION_SNAPSHOTS
+9. EVALUATE_1M_OUTCOMES
+10. EVALUATE_3M_OUTCOMES
+11. EVALUATE_6M_OUTCOMES
+12. EVALUATE_1Y_OUTCOMES
+13. EVALUATE_5Y_OUTCOMES
+14. EVALUATE_10Y_OUTCOMES
+15. CALCULATE_PORTFOLIO_PERFORMANCE
+16. CALCULATE_CONFIDENCE_CALIBRATION
+17. GENERATE_REPORT
+```
+
+Every stage must be independently rerunnable.
+
+Use an idempotent execution strategy. Rerunning a stage with the same dataset and algorithm version must not create duplicate predictions or outcomes.
+
+## 5. Backtesting methodology
+
+### Historical periods
+
+Use approximately ten years of available daily data.
+
+For the initial research:
+
+- Warm-up: at least 200 trading sessions.
+- Training: earliest available period through 2021.
+- Validation: 2022–2023.
+- Out-of-sample testing: 2024–2026, subject to the actual available end date.
+
+Do not use out-of-sample results to tune the model and then report those same results as independent validation.
+
+Use walk-forward evaluation for more robust model comparisons.
+
+### Six evaluation horizons
+
+| Horizon | Trading sessions |
+|---|---:|
+| 1M | 21 |
+| 3M | 63 |
+| 6M | 126 |
+| 1Y | 252 |
+| 5Y | 1,260 |
+| 10Y | 2,520 |
+
+The 5Y and 10Y horizons will have fewer eligible observations. Display sample counts and pending results explicitly.
+
+### Risk and portfolio measurements
+
+Calculate:
+
+- CAGR.
+- Total return.
+- Maximum drawdown.
+- Sharpe ratio.
+- Sortino ratio.
+- Win rate.
+- Profit factor.
+- Average winning trade.
+- Average losing trade.
+- Turnover.
+- Exposure.
+- Transaction costs.
+- Nifty-relative performance.
+
+Use a portfolio simulation with defined capital allocation and position limits. Avoid treating every daily signal as an independent investment.
+
+## 6. Spring Boot REST APIs
+
+Base path:
+
+`/api/v1/backtesting`
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/runs` | Create backtest |
+| GET | `/runs` | List backtests |
+| GET | `/runs/{id}` | Run status and details |
+| POST | `/runs/{id}/cancel` | Cancel running job |
+| GET | `/summary` | Portfolio summary |
+| GET | `/stocks` | All 17 stock results |
+| GET | `/stocks/{symbol}` | Stock-level report |
+| GET | `/stocks/{symbol}/signals` | Historical signals |
+| GET | `/stocks/{symbol}/outcomes` | Historical outcomes |
+| GET | `/calibration` | Calibration summary |
+| GET | `/calibration/curve` | Calibration curve |
+| GET | `/benchmark` | Nifty comparison |
+| GET | `/risk` | Risk analytics |
+| GET | `/data-quality` | Historical data quality |
+
+### Create backtest request
+
+```json
+{
+  "name": "10-Year-17-Stock-Backtest",
+  "universe": "ALL_17",
+  "dataProvider": "YAHOO",
+  "periodYears": 10,
+  "horizons": [
+    21, 63, 126, 252, 1260, 2520
+  ],
+  "signalMode": "RECONSTRUCT",
+  "benchmark": "^NSEI",
+  "includeTransactionCosts": true
+}
+```
+
+### Response
+
+```json
+{
+  "runId": "generated-uuid",
+  "status": "QUEUED",
+  "totalStocks": 17,
+  "provider": "YAHOO",
+  "periodYears": 10,
+  "message": "Backtest queued successfully"
+}
+```
+
+Use a queue or durable job scheduler for long-running backtests. Provide progress, error details and retry support.
+
+## 7. React dashboard specification
+
+Create a dedicated navigation entry:
+
+**Stock Analysis → Backtesting & Calibration**
+
+### Page 1 — Overview
+
+Display:
+
+- Total predictions.
+- Overall success rate.
+- Target hit rate.
+- Stop-loss hit rate.
+- Portfolio CAGR.
+- Nifty CAGR.
+- Excess return.
+- Maximum drawdown.
+
+### Page 2 — Stock performance
+
+Columns:
+
+| Stock | Signals | Win rate | Target hit | Stop hit | Excess return |
+|---|---:|---:|---:|---:|---:|
+| UNO MINDA | — | — | — | — | — |
+| Kotak Bank | — | — | — | — | — |
+| BSE | — | — | — | — | — |
+
+Include all 17 stocks, sorting, filtering and CSV export.
+
+### Page 3 — Confidence calibration
+
+Display:
+
+- Predicted confidence buckets.
+- Actual success rate.
+- Number of predictions.
+- Brier score.
+- Calibration error.
+- Reliability diagram.
+- Confidence intervals.
+
+### Page 4 — Historical signals
+
+Display:
+
+- Signal date.
+- Entry date.
+- Stock price.
+- BUY/HOLD/SELL.
+- Original confidence.
+- Calibrated probability, if available.
+- Target and stop-loss.
+- Actual outcome.
+
+### Page 5 — Risk analysis
+
+Display:
+
+- Portfolio equity curve.
+- Maximum drawdown.
+- Volatility.
+- Sharpe ratio.
+- Stock-level risk.
+- Sector concentration.
+- Nifty comparison.
+
+### Page 6 — Algorithm comparison
+
+Compare:
+
+- Algorithm version.
+- Historical performance.
+- Confidence calibration.
+- Win rate.
+- Drawdown.
+- Out-of-sample performance.
+
+Clearly label results that have not been independently validated.
+
+## 8. Testing specification
+
+### Python unit tests
+
+| Test | Expected result |
+|---|---|
+| SMA calculation | Matches reference values |
+| RSI calculation | Matches reference values |
+| Momentum calculation | Correct period returns |
+| Missing price data | Flagged |
+| Duplicate dates | Rejected or deduplicated deterministically |
+| Invalid OHLC | Flagged |
+| Target hit | TARGET_HIT |
+| Stop hit | STOP_HIT |
+| Both same candle | STOP_FIRST |
+| No target/stop | HORIZON_EXPIRED |
+| Gap below stop | Correct executable exit |
+| Corporate split | No artificial return spike |
+| Dividend | Correct total-return treatment |
+| Confidence calibration | Correct Brier score |
+| Benchmark comparison | Correct aligned returns |
+
+### Java integration tests
+
+- Create a backtest.
+- Fetch status.
+- Retrieve stock-level results.
+- Retrieve calibration results.
+- Validate request parameters.
+- Handle unavailable historical data.
+- Handle Python service failure.
+- Test idempotency.
+- Test authorization.
+- Test job cancellation.
+
+### React tests
+
+- Backtesting overview renders.
+- All 17 stock rows render.
+- Filters work.
+- Horizon selection works.
+- Historical signals display correctly.
+- Calibration chart handles missing samples.
+- Pending results are clearly displayed.
+- Failed runs show actionable errors.
+- CSV export matches displayed data.
+
+### Important financial validation tests
+
+Create deterministic synthetic price datasets to test:
+
+1. A stock that continuously rises.
+2. A stock that continuously falls.
+3. A stock that hits its target.
+4. A stock that hits its stop-loss.
+5. A stock that hits both on the same day.
+6. A stock with a price gap.
+7. A stock with a split.
+8. A stock with dividends.
+9. A stock with missing trading sessions.
+
+The engine must produce predictable results for these fixtures before real-market testing.
+
+## 9. Implementation phases
+
+### Phase 1 — Foundation
+
+- Inspect the existing application.
+- Confirm database schema and Flyway version.
+- Identify current scoring implementation.
+- Create the 17-stock registry.
+- Verify Yahoo symbol mappings.
+- Create database migrations.
+- Set up Python environment.
+
+**Acceptance:** Database and project structure work without affecting existing functionality.
+
+### Phase 2 — Historical ingestion
+
+- Download ten years of available daily prices.
+- Download Nifty 50 data.
+- Validate historical prices.
+- Handle symbol changes.
+- Handle corporate actions.
+- Persist data in PostgreSQL.
+
+**Acceptance:** All available historical data is persisted, and missing data is reported.
+
+### Phase 3 — Signal reconstruction
+
+- Inspect and port the existing scoring rules.
+- Recalculate historical indicators.
+- Reconstruct historical predictions.
+- Save algorithm version and inputs.
+- Verify sample predictions manually.
+
+**Acceptance:** The same historical dataset and scoring version produce reproducible signals.
+
+### Phase 4 — Outcome engine
+
+- Execute simulated next-day entries.
+- Calculate all six horizons.
+- Evaluate targets and stops.
+- Calculate net returns.
+- Compare with Nifty 50.
+- Calculate portfolio performance.
+
+**Acceptance:** Deterministic fixtures and historical samples pass.
+
+### Phase 5 — Calibration
+
+- Calculate actual win rates.
+- Calculate Brier score and log loss.
+- Generate reliability curves.
+- Apply calibration using training data only.
+- Evaluate on unseen data.
+
+**Acceptance:** Original confidence and calibrated probability are separately reported.
+
+### Phase 6 — Spring Boot integration
+
+- Implement backtesting controllers.
+- Implement services and repositories.
+- Integrate the Python engine.
+- Implement job management.
+- Implement error handling.
+
+**Acceptance:** Complete API workflow works end-to-end.
+
+### Phase 7 — React dashboard
+
+- Implement all six pages.
+- Add filters and visualizations.
+- Add exports.
+- Add job progress.
+- Add report generation.
+
+**Acceptance:** Users can run, inspect and export backtest reports.
+
+### Phase 8 — Production hardening
+
+- Add scheduling.
+- Add logging and monitoring.
+- Add retry handling.
+- Add data freshness alerts.
+- Add performance testing.
+- Document limitations.
+
+**Acceptance:** Repeatable, monitored and auditable execution.
+
+## 10. Non-functional requirements
+
+| Area | Requirement |
+|---|---|
+| Reliability | Failed jobs can be resumed |
+| Reproducibility | Same inputs and versions produce same outputs |
+| Performance | Batch processing and incremental ingestion |
+| Security | Credentials outside source code |
+| Data quality | Every dataset has validation status |
+| Observability | Job-level logs and metrics |
+| Auditability | Immutable prediction history |
+| Maintainability | Versioned indicators and scoring |
+| API | Pagination and validation |
+| Testing | Automated unit and integration tests |
+
+## 11. Definition of Done
+
+The implementation is complete only when:
+
+- [ ] All 17 instruments have verified historical mappings.
+- [ ] Ten years of available Yahoo data have been ingested.
+- [ ] Nifty 50 benchmark history is available.
+- [ ] Corporate actions are handled.
+- [ ] No look-ahead bias is present.
+- [ ] Historical signals can be reproduced.
+- [ ] All six horizons are evaluated.
+- [ ] Target and stop-loss outcomes are independently measured.
+- [ ] Transaction costs are included.
+- [ ] Confidence calibration is calculated.
+- [ ] Training and out-of-sample results are separated.
+- [ ] All 17 stocks appear in the dashboard.
+- [ ] API and UI integration tests pass.
+- [ ] Data limitations are visible.
+- [ ] A report can be exported.
+
+---
+
+## 12. Initial implementation command sequence
+
+After inspecting the existing project, use this order:
+
+```bash
+# 1. Inspect existing structure
+find . -maxdepth 3 -type f | head -200
+
+# 2. Inspect backend
+find backend -maxdepth 5 -type f
+
+# 3. Inspect frontend
+find frontend/src -maxdepth 4 -type f
+
+# 4. Inspect Python environment
+python3 --version
+
+# 5. Inspect PostgreSQL migrations
+find . -path '*db/migration*' -type f
+
+# 6. Implement database migrations
+
+# 7. Implement Python ingestion and analytics
+
+# 8. Run Python tests
+pytest analytics/tests -v
+
+# 9. Run Maven tests
+cd backend
+./mvnw test
+
+# 10. Build frontend
+cd ../frontend
+npm run build
+```
+
+These are inspection and validation steps, not proof that the commands will match your existing repository layout. Adapt them after inspection. Do not overwrite existing files or create a second competing application structure.
+
+---
+
+## 13. Important design decisions
+
+1. Historical price indicators are reconstructed from historical prices.
+2. Historical fundamental information must be point-in-time.
+3. Original dashboard confidence is not assumed to be probability.
+4. Calibrated probability is a separate model output.
+5. A successful target hit and a positive horizon return are different outcomes.
+6. The same-day target/stop ambiguity uses a conservative stop-first convention.
+7. The 5Y and 10Y results are pending when the required forward observations do not exist.
+8. Every prediction is associated with an algorithm and data version.
+9. Yahoo Finance is a research data source; production use must respect its access and licensing conditions.
+10. Historical results do not guarantee future performance.
+
+**Final deliverable:** A reproducible, versioned historical backtesting and confidence-calibration platform for all 17 stocks, integrated into the existing React + Spring Boot + PostgreSQL + Python application.

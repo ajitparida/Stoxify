@@ -82,6 +82,7 @@ interface HealthDiagnosticsViewProps {
     sourceTicker?: string
   ) => void;
   onInspectChart: (symbol: string, levels?: ChartOverlayLevels) => void;
+  onInspectBacktest?: (symbol: string) => void;
 }
 
 const CAP_COLORS = ['#1D4ED8', '#0284C7', '#0F766E', '#64748B'];
@@ -106,6 +107,7 @@ export function HealthDiagnosticsView({
   isInWatchlist,
   onStageRotationBuy,
   onInspectChart,
+  onInspectBacktest,
 }: HealthDiagnosticsViewProps) {
   const [internalTab, setInternalTab] = useState<DiagnosticsSubTab>('audit');
   const [verdictFilter, setVerdictFilter] = useState<'ALL' | 'BUY' | 'HOLD' | 'EXIT'>('ALL');
@@ -550,6 +552,57 @@ export function HealthDiagnosticsView({
                       {item.confidence && (
                         <div className="pt-1.5 border-t border-slate-100">
                           <ConfidenceBreakdownBar confidence={item.confidence} variant="compact" />
+                        </div>
+                      )}
+
+                      {item.calibration && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 bg-slate-50 border border-slate-200/80 rounded text-[11px]">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-600">
+                            {item.calibration.calibratedWinProb3M !== null && (
+                              <span className="font-mono-tabular">
+                                3M Cal. Odds{' '}
+                                <span className="font-bold text-blue-700">
+                                  {item.calibration.calibratedWinProb3M.toFixed(0)}%
+                                </span>
+                              </span>
+                            )}
+                            {item.calibration.stockEdgeTier && (
+                              <>
+                                <span className="text-slate-300">·</span>
+                                <span>
+                                  10Y Edge{' '}
+                                  <span
+                                    className={`font-semibold ${
+                                      item.calibration.stockEdgeTier === 'Strong'
+                                        ? 'text-green-700'
+                                        : item.calibration.stockEdgeTier === 'Moderate'
+                                        ? 'text-blue-700'
+                                        : item.calibration.stockEdgeTier === 'Weak'
+                                        ? 'text-red-700'
+                                        : 'text-slate-700'
+                                    }`}
+                                  >
+                                    {item.calibration.stockEdgeTier}
+                                  </span>
+                                  {item.calibration.stockExcessReturn3M !== null && (
+                                    <span className="font-mono-tabular text-slate-500">
+                                      {' '}
+                                      ({formatPercent(item.calibration.stockExcessReturn3M)} vs Nifty)
+                                    </span>
+                                  )}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          {onInspectBacktest && (
+                            <button
+                              type="button"
+                              onClick={() => onInspectBacktest(item.symbol)}
+                              className="font-medium text-blue-700 hover:underline whitespace-nowrap shrink-0"
+                            >
+                              10Y Audit →
+                            </button>
+                          )}
                         </div>
                       )}
 

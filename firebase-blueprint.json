@@ -431,6 +431,118 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "BacktestRun": {
+      "title": "BacktestRun",
+      "description": "An immutable snapshot of a 10-year historical backtest and confidence calibration run",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "methodology": {
+          "type": "string",
+          "enum": ["TECH_RECONSTRUCTED_V1"]
+        },
+        "universeMode": {
+          "type": "string",
+          "enum": ["portfolio_plus_flagship", "flagship", "portfolio_only"]
+        },
+        "samplingFrequency": {
+          "type": "string",
+          "enum": ["monthly", "biweekly", "weekly"]
+        },
+        "costBps": {
+          "type": "number"
+        },
+        "trainCutoffDate": {
+          "type": "string",
+          "maxLength": 20,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "symbols": {
+          "type": "array",
+          "description": "Evaluated NSE/BSE symbols (1 to 30)"
+        },
+        "portfolioMetrics": {
+          "type": "object"
+        },
+        "horizonSummaries": {
+          "type": "array",
+          "description": "Summary metrics for 1M, 3M, 6M, 1Y, 5Y, and 10Y horizons (1 to 6)"
+        },
+        "calibration3M": {
+          "type": "object"
+        },
+        "calibration1Y": {
+          "type": "object"
+        },
+        "stockScorecards": {
+          "type": "array",
+          "description": "Per-stock historical scorecards (1 to 30)"
+        },
+        "equityCurve": {
+          "type": "array",
+          "description": "Monthly indexed portfolio vs Nifty 50 equity curve points (0 to 140)"
+        },
+        "recentSignals": {
+          "type": "array",
+          "description": "Bounded audit sample of recent historical signals (0 to 150)"
+        },
+        "totalSignalsGenerated": {
+          "type": "number"
+        },
+        "dataQuality": {
+          "type": "array",
+          "description": "Per-symbol data coverage and corporate action report (0 to 30)"
+        },
+        "computedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "label",
+        "methodology",
+        "universeMode",
+        "samplingFrequency",
+        "costBps",
+        "trainCutoffDate",
+        "symbols",
+        "portfolioMetrics",
+        "horizonSummaries",
+        "calibration3M",
+        "calibration1Y",
+        "stockScorecards",
+        "equityCurve",
+        "recentSignals",
+        "totalSignalsGenerated",
+        "dataQuality",
+        "computedAt",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -453,6 +565,10 @@
     "/users/{userId}/algoOrders/{orderId}": {
       "schema": { "$ref": "#/entities/AlgoOrder" },
       "description": "User-scoped simulated paper-trade execution and risk-guardrail ledger"
+    },
+    "/users/{userId}/backtestRuns/{runId}": {
+      "schema": { "$ref": "#/entities/BacktestRun" },
+      "description": "User-scoped immutable 10-year historical backtesting and calibration snapshots"
     }
   }
 }

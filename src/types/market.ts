@@ -217,6 +217,7 @@ export interface HoldingAiRating {
   guardrailNote?: string;
   confidence?: ConfidenceBreakdown;
   fundamentals?: LiveFundamentalsSnapshot | null;
+  calibration?: LiveCalibrationContext | null;
 }
 
 export interface PortfolioAnalysisResponse {
@@ -251,6 +252,7 @@ export interface SymbolAiOutlook {
   fundamentals?: LiveFundamentalsSnapshot | null;
   technicalSummary?: TechnicalSummary | null;
   fairValue?: IntrinsicFairValue | null;
+  calibration?: LiveCalibrationContext | null;
   benchmarkNifty6M: number | null;
   analysisSource: 'gemini' | 'fallback_engine';
   quotaNotice?: string;
@@ -965,5 +967,266 @@ export interface LiveResearchSignal extends ResearchSignal {
   walkForward?: WalkForwardStats | null;
   fundamentals?: LiveFundamentalsSnapshot | null;
 }
+
+export type BacktestHorizonDays = 21 | 63 | 126 | 252 | 1260 | 2520;
+
+export type BacktestUniverseMode = 'portfolio_plus_flagship' | 'flagship' | 'portfolio_only';
+
+export type BacktestSamplingFrequency = 'monthly' | 'biweekly' | 'weekly';
+
+export type BacktestOutcomeStatus =
+  | 'TARGET_HIT'
+  | 'STOP_HIT'
+  | 'HORIZON_EXPIRED'
+  | 'BOTH_SAME_BAR'
+  | 'PENDING'
+  | 'DATA_UNAVAILABLE';
+
+export type BacktestFirstHit = 'TARGET' | 'STOP' | 'NONE' | 'PENDING';
+
+export type BacktestSplitSegment = 'TRAIN' | 'OOS';
+
+export type StockEdgeTier = 'Strong' | 'Moderate' | 'Neutral' | 'Weak';
+
+export interface LiveCalibrationContext {
+  calibratedWinProb3M: number | null;
+  calibratedWinProb1Y: number | null;
+  rawConfidenceBucket: string;
+  oosSampleCount: number;
+  stockEdgeTier: StockEdgeTier | null;
+  stockWinRate3M: number | null;
+  stockExcessReturn3M: number | null;
+  stockProfitFactor: number | null;
+  exitAvoidanceRate3M: number | null;
+  sampleHorizonLabel: string;
+  methodologyTag: 'TECH_RECONSTRUCTED_V1';
+  sourceRunLabel: string;
+}
+
+export interface BacktestSignalOutcome {
+  horizonDays: BacktestHorizonDays;
+  horizonLabel: '1M' | '3M' | '6M' | '1Y' | '5Y' | '10Y';
+  status: BacktestOutcomeStatus;
+  firstHit: BacktestFirstHit;
+  exitDate: string | null;
+  exitPrice: number | null;
+  daysHeld: number | null;
+  grossPriceReturnPct: number | null;
+  netPriceReturnPct: number | null;
+  grossTotalReturnPct: number | null;
+  netTotalReturnPct: number | null;
+  niftyReturnPct: number | null;
+  excessReturnPct: number | null;
+  maxDrawdownPct: number | null;
+  maxFavorableExcursionPct: number | null;
+  won: boolean | null;
+  exitAvoidedLoss: boolean | null;
+}
+
+export interface BacktestSignalRecord {
+  id: string;
+  symbol: string;
+  ticker: string;
+  companyName: string;
+  sector: string;
+  signalDate: string;
+  entryDate: string;
+  entryPrice: number;
+  signalClosePrice: number;
+  verdict: AiRatingVerdict;
+  conviction: 'High' | 'Medium' | 'Low';
+  rawConfidence: number;
+  calibratedProb3M: number | null;
+  targetPrice: number;
+  stopLossPrice: number;
+  rsi14: number | null;
+  betaEst: number;
+  split: BacktestSplitSegment;
+  outcomes: Record<string, BacktestSignalOutcome>;
+}
+
+export interface BacktestStockScorecard {
+  symbol: string;
+  ticker: string;
+  companyName: string;
+  sector: string;
+  historyYears: number;
+  totalSignals: number;
+  buySignals: number;
+  holdSignals: number;
+  exitSignals: number;
+  winRate1M: number | null;
+  winRate3M: number | null;
+  winRate6M: number | null;
+  winRate1Y: number | null;
+  avgNetReturn3M: number | null;
+  avgTotalReturn3M: number | null;
+  avgExcessReturn3M: number | null;
+  avgNetReturn1Y: number | null;
+  avgTotalReturn1Y: number | null;
+  avgExcessReturn1Y: number | null;
+  targetHitRate3M: number | null;
+  stopHitRate3M: number | null;
+  exitAvoidanceRate3M: number | null;
+  profitFactor3M: number | null;
+  maxDrawdown3M: number | null;
+  edgeTier: StockEdgeTier;
+  inUserPortfolio: boolean;
+}
+
+export interface BacktestCalibrationBucket {
+  bucketLabel: string;
+  minScore: number;
+  maxScore: number;
+  trainCount: number;
+  trainPredictedAvgPct: number | null;
+  trainActualWinRatePct: number | null;
+  oosCount: number;
+  oosPredictedAvgPct: number | null;
+  oosActualWinRatePct: number | null;
+  oosCalibratedProbPct: number | null;
+  oosCiLowPct: number | null;
+  oosCiHighPct: number | null;
+  avgExcessReturnPct: number | null;
+}
+
+export interface BacktestCalibrationReport {
+  horizonDays: BacktestHorizonDays;
+  horizonLabel: '1M' | '3M' | '6M' | '1Y' | '5Y' | '10Y';
+  trainCutoffDate: string;
+  trainSampleCount: number;
+  oosSampleCount: number;
+  rawBrierScoreOos: number | null;
+  calibratedBrierScoreOos: number | null;
+  rawLogLossOos: number | null;
+  calibratedLogLossOos: number | null;
+  rawEceOosPct: number | null;
+  calibratedEceOosPct: number | null;
+  exitSignalCountOos: number;
+  exitAvoidedNegativeRateOosPct: number | null;
+  exitUnderperformedNiftyRateOosPct: number | null;
+  buckets: BacktestCalibrationBucket[];
+}
+
+export interface BacktestHorizonSummary {
+  horizonDays: BacktestHorizonDays;
+  horizonLabel: '1M' | '3M' | '6M' | '1Y' | '5Y' | '10Y';
+  resolvedBuyCount: number;
+  pendingBuyCount: number;
+  resolvedExitCount: number;
+  buyWinRatePct: number | null;
+  buyBeatNiftyRatePct: number | null;
+  avgNetPriceReturnPct: number | null;
+  avgNetTotalReturnPct: number | null;
+  medianNetReturnPct: number | null;
+  avgNiftyReturnPct: number | null;
+  avgExcessReturnPct: number | null;
+  targetHitRatePct: number | null;
+  stopHitRatePct: number | null;
+  sameBarStopFirstCount: number;
+  avgMaxDrawdownPct: number | null;
+  profitFactor: number | null;
+  exitAvoidanceRatePct: number | null;
+}
+
+export interface BacktestEquityPoint {
+  date: string;
+  portfolioIndexed: number;
+  niftyIndexed: number;
+  drawdownPct: number;
+  niftyDrawdownPct: number;
+  activePositions: number;
+}
+
+export interface BacktestPortfolioMetrics {
+  startDate: string;
+  endDate: string;
+  yearsSimulated: number;
+  portfolioCagrPct: number;
+  niftyCagrPct: number;
+  excessCagrPct: number;
+  portfolioTotalReturnPct: number;
+  niftyTotalReturnPct: number;
+  maxDrawdownPct: number;
+  niftyMaxDrawdownPct: number;
+  annualizedVolatilityPct: number;
+  sharpeRatio: number | null;
+  sortinoRatio: number | null;
+  profitFactor: number | null;
+  avgWinPct: number | null;
+  avgLossPct: number | null;
+  totalClosedTrades: number;
+  annualTurnoverPct: number;
+}
+
+export interface BacktestDataQualityItem {
+  symbol: string;
+  ticker: string;
+  status: 'OK' | 'PARTIAL_HISTORY' | 'UNAVAILABLE';
+  barsCount: number;
+  startDate: string | null;
+  endDate: string | null;
+  historyYears: number;
+  dividendEvents: number;
+  splitEvents: number;
+  missingGapWarnings: number;
+  note: string;
+}
+
+export interface BacktestRunRequest {
+  universeMode?: BacktestUniverseMode;
+  portfolioSymbols?: string[];
+  customSymbols?: string[];
+  costBps?: number;
+  samplingFrequency?: BacktestSamplingFrequency;
+  maxConcurrentPositions?: number;
+}
+
+export interface BacktestRunResult {
+  runId: string;
+  label: string;
+  methodology: 'TECH_RECONSTRUCTED_V1';
+  methodologyNote: string;
+  universeMode: BacktestUniverseMode;
+  samplingFrequency: BacktestSamplingFrequency;
+  costBps: number;
+  trainCutoffDate: string;
+  symbolsRequested: string[];
+  symbolsEvaluated: string[];
+  portfolioMetrics: BacktestPortfolioMetrics;
+  horizonSummaries: BacktestHorizonSummary[];
+  calibrationByHorizon: Record<string, BacktestCalibrationReport>;
+  stockScorecards: BacktestStockScorecard[];
+  equityCurve: BacktestEquityPoint[];
+  signals: BacktestSignalRecord[];
+  totalSignalsGenerated: number;
+  dataQuality: BacktestDataQualityItem[];
+  computedAt: string;
+}
+
+export interface BacktestRunFirestoreRecord {
+  id: string;
+  userId: string;
+  label: string;
+  methodology: 'TECH_RECONSTRUCTED_V1';
+  universeMode: BacktestUniverseMode;
+  samplingFrequency: BacktestSamplingFrequency;
+  costBps: number;
+  trainCutoffDate: string;
+  symbols: string[];
+  portfolioMetrics: BacktestPortfolioMetrics;
+  horizonSummaries: BacktestHorizonSummary[];
+  calibration3M: BacktestCalibrationReport;
+  calibration1Y: BacktestCalibrationReport;
+  stockScorecards: BacktestStockScorecard[];
+  equityCurve: BacktestEquityPoint[];
+  recentSignals: BacktestSignalRecord[];
+  totalSignalsGenerated: number;
+  dataQuality: BacktestDataQualityItem[];
+  computedAt: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 
 

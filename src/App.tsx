@@ -6,6 +6,7 @@ import {
   Briefcase,
   CandlestickChart,
   Compass,
+  FlaskConical,
   Layers,
   LayoutDashboard,
   LogIn,
@@ -28,13 +29,16 @@ import {
   createHolding,
   createMutualFundHolding,
   deleteAlgoStrategy,
+  deleteBacktestRun,
   deleteHolding,
   deleteMutualFundHolding,
   removeWatchlistItem,
+  saveBacktestRun,
   signInWithGoogle,
   signOutUser,
   subscribeAlgoOrders,
   subscribeAlgoStrategies,
+  subscribeBacktestRuns,
   subscribeHoldings,
   subscribeMutualFunds,
   subscribeWatchlist,
@@ -47,6 +51,7 @@ import {
 import { AddHoldingModal } from './components/AddHoldingModal';
 import { AddMutualFundModal } from './components/AddMutualFundModal';
 import { AlgoTradingView } from './components/AlgoTradingView';
+import { BacktestingCalibrationView } from './components/BacktestingCalibrationView';
 import { ConfirmActionModal } from './components/ConfirmActionModal';
 import { HealthDiagnosticsView, type DiagnosticsSubTab } from './components/HealthDiagnosticsView';
 import { MarketChartTerminal, type ChartOverlayLevels } from './components/MarketChartTerminal';
@@ -63,6 +68,8 @@ import type {
   AlgoStrategyDraft,
   AlgoStrategyRecord,
   AlgoStrategyStatus,
+  BacktestRunFirestoreRecord,
+  BacktestRunResult,
   CapitalRotationResponse,
   Exchange,
   HoldingRecord,
@@ -96,6 +103,7 @@ type WorkspaceTab =
   | 'diagnostics'
   | 'discovery'
   | 'charts'
+  | 'backtesting'
   | 'algo';
 
 const NAV_GROUPS: Array<{
@@ -119,6 +127,7 @@ const NAV_GROUPS: Array<{
     items: [
       { key: 'discovery', label: 'Market Discovery', icon: Compass },
       { key: 'charts', label: 'Live Charts', icon: CandlestickChart },
+      { key: 'backtesting', label: 'Backtesting & Calibration', icon: FlaskConical },
     ],
   },
 ];
@@ -159,11 +168,14 @@ export default function App() {
   const [cloudMutualFunds, setCloudMutualFunds] = useState<MutualFundHoldingRecord[]>([]);
   const [cloudAlgoStrategies, setCloudAlgoStrategies] = useState<AlgoStrategyRecord[]>([]);
   const [cloudAlgoOrders, setCloudAlgoOrders] = useState<AlgoOrderRecord[]>([]);
+  const [cloudBacktestRuns, setCloudBacktestRuns] = useState<BacktestRunFirestoreRecord[]>([]);
   const [guestHoldings, setGuestHoldings] = useState<HoldingRecord[]>([]);
   const [guestWatchlist, setGuestWatchlist] = useState<string[]>(DEFAULT_WATCHLIST_SYMBOLS);
   const [guestMutualFunds, setGuestMutualFunds] = useState<MutualFundHoldingRecord[]>([]);
   const [guestAlgoStrategies, setGuestAlgoStrategies] = useState<AlgoStrategyRecord[]>([]);
   const [guestAlgoOrders, setGuestAlgoOrders] = useState<AlgoOrderRecord[]>([]);
+  const [guestBacktestRuns, setGuestBacktestRuns] = useState<BacktestRunFirestoreRecord[]>([]);
+  const [backtestSymbolFilter, setBacktestSymbolFilter] = useState<string | null>(null);
   const [paperEvalResult, setPaperEvalResult] = useState<AlgoPaperEvaluateResponse | null>(null);
   const [paperEvalLoading, setPaperEvalLoading] = useState(false);
   const [autoTickAlgo, setAutoTickAlgo] = useState(true);
@@ -247,6 +259,7 @@ export default function App() {
       setCloudMutualFunds([]);
       setCloudAlgoStrategies([]);
       setCloudAlgoOrders([]);
+      setCloudBacktestRuns([]);
       return;
     }
 
@@ -295,12 +308,22 @@ export default function App() {
       }
     );
 
+    const unsubBacktestRuns = subscribeBacktestRuns(
+      user.uid,
+      (items) => setCloudBacktestRuns(items),
+      (err) => {
+        console.error(err);
+        showToast('Unable to sync saved backtest runs.', 'error');
+      }
+    );
+
     return () => {
       unsubHoldings();
       unsubWatchlist();
       unsubMutualFunds();
       unsubAlgoStrategies();
       unsubAlgoOrders();
+      unsubBacktestRuns();
     };
   }, [authReady, user, showToast]);
 
@@ -308,6 +331,63 @@ export default function App() {
   const activeMutualFunds = user ? cloudMutualFunds : guestMutualFunds;
   const activeAlgoStrategies = user ? cloudAlgoStrategies : guestAlgoStrategies;
   const activeAlgoOrders = user ? cloudAlgoOrders : guestAlgoOrders;
+  const activeBacktestRuns = user ? cloudBacktestRuns : guestBacktestRuns;
+
+  const openBacktestingForSymbol = useCallback((symbol: string) => {
+    setBacktestSymbolFilter(symbol);
+    setActiveTab('backtesting');
+  }, []);
+
+  const handleSaveBacktestRun = async (run: BacktestRunResult) => {
+    if (user) {
+      try {
+        await saveBacktestRun(user.uid, run);
+        showToast(`Saved "${run.label}" to your cloud workspace.`);
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Unable to save backtest run.', 'error');
+      }
+    } else {
+      const fallbackCal = run.calibrationByHorizon['63'] ?? Object.values(run.calibrationByHorizon)[0];
+      const cal1Y = run.calibrationByHorizon['252'] ?? fallbackCal;
+      const guestRec: BacktestRunFirestoreRecord = {
+        id: run.runId,
+        userId: 'guest',
+        label: run.label,
+        methodology: run.methodology,
+        universeMode: run.universeMode,
+        samplingFrequency: run.samplingFrequency,
+        costBps: run.costBps,
+        trainCutoffDate: run.trainCutoffDate,
+        symbols: run.symbolsEvaluated,
+        portfolioMetrics: run.portfolioMetrics,
+        horizonSummaries: run.horizonSummaries,
+        calibration3M: fallbackCal,
+        calibration1Y: cal1Y,
+        stockScorecards: run.stockScorecards,
+        equityCurve: run.equityCurve,
+        recentSignals: run.signals.slice(0, 120),
+        totalSignalsGenerated: run.totalSignalsGenerated,
+        dataQuality: run.dataQuality,
+        computedAt: run.computedAt,
+      };
+      setGuestBacktestRuns((prev) => [guestRec, ...prev.filter((r) => r.id !== guestRec.id)]);
+      showToast(`Saved "${run.label}" to session history (sign in to sync to cloud).`);
+    }
+  };
+
+  const handleDeleteBacktestRun = async (runId: string) => {
+    if (user) {
+      try {
+        await deleteBacktestRun(user.uid, runId);
+        showToast('Saved backtest run deleted.');
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Unable to delete backtest run.', 'error');
+      }
+    } else {
+      setGuestBacktestRuns((prev) => prev.filter((r) => r.id !== runId));
+      showToast('Removed backtest run from session.');
+    }
+  };
   const activeWatchlistSymbols = useMemo(() => {
     if (user) {
       return cloudWatchlist.length > 0
@@ -1898,6 +1978,7 @@ export default function App() {
                             guardrailNote: updated.guardrailNote,
                             confidence: updated.confidence ?? r.confidence,
                             fundamentals: updated.fundamentals ?? r.fundamentals,
+                            calibration: updated.calibration ?? r.calibration,
                           }
                         : r
                     ),
@@ -1905,6 +1986,7 @@ export default function App() {
                   };
                 });
               }}
+              onInspectBacktest={openBacktestingForSymbol}
               onAddHoldingClick={(sym) => {
                 setEditingHolding(null);
                 setPrefillHolding(
@@ -1925,6 +2007,19 @@ export default function App() {
                 void handleToggleWatchlist(sym, name, exch, sec)
               }
               isInWatchlist={isInWatchlist}
+            />
+          )}
+
+          {activeTab === 'backtesting' && (
+            <BacktestingCalibrationView
+              holdings={enrichedHoldings}
+              isGuestMode={!user}
+              savedRuns={activeBacktestRuns}
+              initialSymbolFilter={backtestSymbolFilter}
+              onClearInitialSymbolFilter={() => setBacktestSymbolFilter(null)}
+              onSaveRun={handleSaveBacktestRun}
+              onDeleteRun={handleDeleteBacktestRun}
+              onInspectChart={(sym, levels) => openChartForSymbol(sym, levels ?? null)}
             />
           )}
 
@@ -1973,6 +2068,7 @@ export default function App() {
                 setAddModalOpen(true);
               }}
               onInspectChart={(sym, levels) => openChartForSymbol(sym, levels ?? null)}
+              onInspectBacktest={openBacktestingForSymbol}
             />
           )}
 

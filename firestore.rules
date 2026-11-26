@@ -195,6 +195,48 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    // Validation Blueprint: BacktestRun
+    function isValidBacktestRun(data) {
+      return data.keys().hasAll([
+          'id', 'userId', 'label', 'methodology', 'universeMode',
+          'samplingFrequency', 'costBps', 'trainCutoffDate', 'symbols',
+          'portfolioMetrics', 'horizonSummaries', 'calibration3M',
+          'calibration1Y', 'stockScorecards', 'equityCurve',
+          'recentSignals', 'totalSignalsGenerated', 'dataQuality',
+          'computedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'userId', 'label', 'methodology', 'universeMode',
+          'samplingFrequency', 'costBps', 'trainCutoffDate', 'symbols',
+          'portfolioMetrics', 'horizonSummaries', 'calibration3M',
+          'calibration1Y', 'stockScorecards', 'equityCurve',
+          'recentSignals', 'totalSignalsGenerated', 'dataQuality',
+          'computedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.userId)
+        && data.userId == request.auth.uid
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 120
+        && data.methodology in ['TECH_RECONSTRUCTED_V1']
+        && data.universeMode in ['portfolio_plus_flagship', 'flagship', 'portfolio_only']
+        && data.samplingFrequency in ['monthly', 'biweekly', 'weekly']
+        && data.costBps is number && data.costBps >= 0 && data.costBps <= 100
+        && data.trainCutoffDate is string && data.trainCutoffDate.size() >= 10 && data.trainCutoffDate.size() <= 20 && data.trainCutoffDate.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.symbols is list && data.symbols.size() >= 1 && data.symbols.size() <= 30 && data.symbols[0] is string && data.symbols[0].size() >= 1 && data.symbols[0].size() <= 32
+        && data.portfolioMetrics is map
+        && data.horizonSummaries is list && data.horizonSummaries.size() >= 1 && data.horizonSummaries.size() <= 6 && data.horizonSummaries[0] is map
+        && data.calibration3M is map
+        && data.calibration1Y is map
+        && data.stockScorecards is list && data.stockScorecards.size() >= 1 && data.stockScorecards.size() <= 30 && data.stockScorecards[0] is map
+        && data.equityCurve is list && data.equityCurve.size() >= 0 && data.equityCurve.size() <= 140 && (data.equityCurve.size() == 0 || data.equityCurve[0] is map)
+        && data.recentSignals is list && data.recentSignals.size() >= 0 && data.recentSignals.size() <= 150 && (data.recentSignals.size() == 0 || data.recentSignals[0] is map)
+        && data.totalSignalsGenerated is number && data.totalSignalsGenerated >= 0 && data.totalSignalsGenerated <= 200000
+        && data.dataQuality is list && data.dataQuality.size() >= 0 && data.dataQuality.size() <= 30 && (data.dataQuality.size() == 0 || data.dataQuality[0] is map)
+        && data.computedAt is string && data.computedAt.size() >= 10 && data.computedAt.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // User Holdings Collection
     match /users/{userId}/holdings/{holdingId} {
       allow get: if isVerifiedOwner(userId) && isValidId(holdingId) && existing().userId == request.auth.uid;
@@ -343,6 +385,25 @@ service cloud.firestore {
       allow update: if false;
 
       allow delete: if isVerifiedOwner(userId) && isValidId(orderId) && existing().userId == request.auth.uid;
+    }
+
+    // User 10-Year Historical Backtest Runs Collection (Immutable Snapshots)
+    match /users/{userId}/backtestRuns/{runId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(runId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedOwner(userId) && existing().userId == request.auth.uid;
+
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidId(runId)
+        && isValidBacktestRun(incoming())
+        && incoming().id == runId
+        && incoming().userId == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if false;
+
+      allow delete: if isVerifiedOwner(userId) && isValidId(runId) && existing().userId == request.auth.uid;
     }
   }
 }

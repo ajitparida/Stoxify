@@ -10,6 +10,7 @@ import {
   computeIntrinsicFairValue,
   computeTechnicalSummaryFromCandles,
 } from './valuationAndTechnicals.ts';
+import { getLiveCalibrationForSymbol } from './historicalBacktestService.ts';
 import type {
   ConfidenceBreakdown,
   HoldingAiRating,
@@ -1004,11 +1005,25 @@ export async function analyzePortfolioHoldings(
 
   const first = batchResults[0];
 
+  const ratingsWithCalibration = await Promise.all(
+    guardedRatings.map(async (r, idx) => {
+      const calibration = await getLiveCalibrationForSymbol({
+        symbol: r.symbol,
+        rawConfidence: r.confidence?.overallScore ?? 60,
+        waitMs: idx === 0 ? 1200 : 0,
+      }).catch(() => null);
+      return {
+        ...r,
+        calibration,
+      };
+    })
+  );
+
   return {
     overallSummary: first?.overallSummary || 'Portfolio evaluation complete.',
     diversificationNote: first?.diversificationNote || '',
     actionPriority: first?.actionPriority || '',
-    ratings: guardedRatings,
+    ratings: ratingsWithCalibration,
     portfolioProjection,
     benchmarkNifty6M: nifty?.return6M ?? null,
     analysisSource: usedFallback ? 'fallback_engine' : 'gemini',
@@ -1290,6 +1305,12 @@ Data: ${JSON.stringify(compactPayload)}`;
     guarded.projection ??
     buildStockProjection(telemetryItem, guarded.rating, guarded.suggestedTarget);
 
+  const calibration = await getLiveCalibrationForSymbol({
+    symbol,
+    rawConfidence: confidence.overallScore,
+    waitMs: 1800,
+  }).catch(() => null);
+
   const result: SymbolAiOutlook = {
     symbol,
     companyName: quote.shortName || symbol,
@@ -1310,6 +1331,7 @@ Data: ${JSON.stringify(compactPayload)}`;
     fundamentals: liveFundamentals,
     technicalSummary,
     fairValue,
+    calibration,
     benchmarkNifty6M: nifty?.return6M ?? null,
     analysisSource: usedFallback ? 'fallback_engine' : 'gemini',
     quotaNotice: usedFallback ? QUOTA_EXHAUSTED_NOTICE : undefined,
