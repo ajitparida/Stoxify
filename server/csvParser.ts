@@ -224,6 +224,9 @@ export async function parseStockPortfolioCsv(
     'instrument',
     'trading symbol',
     'tradingsymbol',
+    'nse symbol',
+    'stock symbol',
+    'ticker',
     'symbol',
     'scrip',
     'stock name',
@@ -239,17 +242,23 @@ export async function parseStockPortfolioCsv(
   ]);
   const avgIdx = findColumnIndex(normalizedHeaders, [
     'avg cost',
+    'average buy price',
+    'avg buy price',
+    'buy avg',
     'average price',
     'avg price',
     'avg buy',
     'buy price',
     'cost price',
+    'purchase price',
     'avg',
   ]);
   const ltpIdx = findColumnIndex(normalizedHeaders, [
     'ltp',
     'last price',
     'live price',
+    'current price',
+    'market price',
     'previous closing price',
     'close price',
   ]);
@@ -257,7 +266,9 @@ export async function parseStockPortfolioCsv(
   const investedIdx = findColumnIndex(normalizedHeaders, [
     'invested',
     'invested amount',
+    'invested value',
     'buy value',
+    'cost value',
   ]);
   const isinIdx = findColumnIndex(normalizedHeaders, ['isin']);
 
@@ -571,19 +582,14 @@ export async function parseMutualFundCsv(
       let units = row.units;
       let notes = isZerodhaCsv ? 'Imported from Zerodha Coin / Kite CSV' : 'Imported from MF CSV';
 
+      // Only derive units from currentValue / liveNav when the CSV omitted units;
+      // NEVER overwrite explicit positive units with historical CSV currentValue (otherwise current value stays frozen at the old export date!)
       if (units <= 0 && row.currentValue > 0 && liveNav > 0) {
         units = row.currentValue / liveNav;
+        notes = `${notes} · Estimated units from CSV current value ÷ live AMFI NAV.`;
       } else if (units <= 0 && row.investedAmount > 0) {
         const navGuess = row.avgNav > 0 ? row.avgNav : liveNav > 0 ? liveNav : 50;
         units = row.investedAmount / navGuess;
-      }
-
-      if (row.currentValue > 0 && liveNav > 0 && units > 0) {
-        const impliedCurrent = units * liveNav;
-        if (Math.abs(impliedCurrent - row.currentValue) / row.currentValue > 0.05) {
-          units = row.currentValue / liveNav;
-          notes = `${notes} · Reconciled units from CSV current value ÷ live AMFI NAV.`;
-        }
       }
 
       units = Number(Math.max(0.0001, units).toFixed(4));
@@ -591,12 +597,8 @@ export async function parseMutualFundCsv(
       let avgNav = row.avgNav;
       if (avgNav <= 0 && row.investedAmount > 0 && units > 0) {
         avgNav = row.investedAmount / units;
-      } else if (row.investedAmount > 0 && units > 0) {
-        // Keep Invested Capital faithful if CSV gave exact invested amount
-        const impliedInvested = units * row.avgNav;
-        if (Math.abs(impliedInvested - row.investedAmount) / row.investedAmount > 0.02) {
-          avgNav = row.investedAmount / units;
-        }
+      } else if (row.units <= 0 && row.investedAmount > 0 && units > 0) {
+        avgNav = row.investedAmount / units;
       }
       if (avgNav <= 0) {
         avgNav = liveNav > 0 ? liveNav : 50;
@@ -608,10 +610,10 @@ export async function parseMutualFundCsv(
           ? row.investedAmount
           : Number((units * avgNav).toFixed(2));
       const currentCheck =
-        row.currentValue > 0
-          ? row.currentValue
-          : liveNav > 0
+        liveNav > 0
           ? Number((units * liveNav).toFixed(2))
+          : row.currentValue > 0
+          ? row.currentValue
           : undefined;
 
       return {

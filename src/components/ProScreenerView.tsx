@@ -61,6 +61,8 @@ export function ProScreenerView({
   const [capFilter, setCapFilter] = useState('All');
   const [rsiFilter, setRsiFilter] = useState<'All' | 'oversold' | 'neutral' | 'overbought'>('All');
   const [peFilter, setPeFilter] = useState<'All' | 'value' | 'moderate' | 'premium'>('All');
+  const [confidenceFilter, setConfidenceFilter] = useState<'All' | 'high' | 'medium' | 'low'>('All');
+  const [trendFilter, setTrendFilter] = useState<'All' | 'above_200' | 'below_200' | 'above_50'>('All');
   const [sortField, setSortField] = useState<SortField>('confidence');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
@@ -110,7 +112,9 @@ export function ProScreenerView({
     sectorFilter !== 'All' ||
     capFilter !== 'All' ||
     rsiFilter !== 'All' ||
-    peFilter !== 'All';
+    peFilter !== 'All' ||
+    confidenceFilter !== 'All' ||
+    trendFilter !== 'All';
 
   const resetFilters = () => {
     setPreset('all');
@@ -120,6 +124,8 @@ export function ProScreenerView({
     setCapFilter('All');
     setRsiFilter('All');
     setPeFilter('All');
+    setConfidenceFilter('All');
+    setTrendFilter('All');
   };
 
   const filtered = useMemo(() => {
@@ -151,6 +157,20 @@ export function ProScreenerView({
           if (peFilter === 'value' && s.peRatio > 22) return false;
           if (peFilter === 'moderate' && (s.peRatio <= 22 || s.peRatio > 40)) return false;
           if (peFilter === 'premium' && s.peRatio <= 40) return false;
+        }
+
+        if (confidenceFilter !== 'All') {
+          const score = s.confidence?.overallScore ?? null;
+          if (score === null) return false;
+          if (confidenceFilter === 'high' && score < 70) return false;
+          if (confidenceFilter === 'medium' && (score < 55 || score >= 70)) return false;
+          if (confidenceFilter === 'low' && score >= 55) return false;
+        }
+
+        if (trendFilter !== 'All') {
+          if (trendFilter === 'above_200' && (!s.sma200 || s.price < s.sma200)) return false;
+          if (trendFilter === 'below_200' && (!s.sma200 || s.price >= s.sma200)) return false;
+          if (trendFilter === 'above_50' && (!s.sma50 || s.price < s.sma50)) return false;
         }
 
         switch (preset) {
@@ -193,6 +213,8 @@ export function ProScreenerView({
     activePatternId,
     rsiFilter,
     peFilter,
+    confidenceFilter,
+    trendFilter,
     preset,
     sortField,
     sortDir,
@@ -322,6 +344,34 @@ export function ProScreenerView({
             <option value="value">Value (&le; 22x)</option>
             <option value="moderate">Moderate (22–40x)</option>
             <option value="premium">Premium (&gt; 40x)</option>
+          </select>
+
+          <select
+            value={confidenceFilter}
+            onChange={(e) =>
+              setConfidenceFilter(e.target.value as 'All' | 'high' | 'medium' | 'low')
+            }
+            aria-label="Filter by confidence score tier"
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+          >
+            <option value="All">Confidence: All</option>
+            <option value="high">High (&ge; 70%)</option>
+            <option value="medium">Medium (55–70%)</option>
+            <option value="low">Low (&lt; 55%)</option>
+          </select>
+
+          <select
+            value={trendFilter}
+            onChange={(e) =>
+              setTrendFilter(e.target.value as 'All' | 'above_200' | 'below_200' | 'above_50')
+            }
+            aria-label="Filter by DMA trend"
+            className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+          >
+            <option value="All">Trend: All</option>
+            <option value="above_200">Above 200-DMA</option>
+            <option value="below_200">Below 200-DMA</option>
+            <option value="above_50">Above 50-DMA</option>
           </select>
 
           {hasActiveFilters && (

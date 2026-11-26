@@ -454,16 +454,11 @@ export async function parseMutualFundImport(params: {
         let units = extUnits;
         let reconciledNote = '';
 
-        if (extCurrent > 0 && liveNav > 0) {
-          const impliedCurrent = extUnits > 0 ? extUnits * liveNav : 0;
-          const withinTolerance =
-            extUnits > 0 && Math.abs(impliedCurrent - extCurrent) / extCurrent <= 0.05;
-          if (!withinTolerance) {
-            units = extCurrent / liveNav;
-            if (extUnits > 0) {
-              reconciledNote = `Reconciled units from screenshot current value ₹${extCurrent.toFixed(0)} ÷ live NAV ₹${liveNav.toFixed(2)}.`;
-            }
-          }
+        // Preserve explicit units printed in CAS PDF / broker statements so live AMFI NAV always computes actual current value.
+        // Only estimate units from screenshot currentValue ÷ liveNav when units were omitted in summary screenshots.
+        if (units <= 0 && extCurrent > 0 && liveNav > 0) {
+          units = extCurrent / liveNav;
+          reconciledNote = `Estimated units from screenshot current value ₹${extCurrent.toFixed(0)} ÷ live NAV ₹${liveNav.toFixed(2)}.`;
         } else if (units <= 0 && extInvested > 0) {
           const fallbackNav =
             Number(row.avgNav) > 0 ? Number(row.avgNav) : liveNav > 0 ? liveNav : 50;
@@ -473,8 +468,9 @@ export async function parseMutualFundImport(params: {
         units = Number(Math.max(0.0001, units).toFixed(4));
 
         let avgNav: number;
-        if (extInvested > 0 && units > 0) {
-          // Derive avgNav from investedAmount / reconciled units so Invested, Current, and Gain % match screenshot
+        if (extUnits > 0 && Number(row.avgNav) > 0) {
+          avgNav = Number(row.avgNav);
+        } else if (extInvested > 0 && units > 0) {
           avgNav = extInvested / units;
         } else if (Number(row.avgNav) > 0) {
           avgNav = Number(row.avgNav);

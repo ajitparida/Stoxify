@@ -38,11 +38,41 @@ for (const item of [...INDIAN_INDICES, ...INDIAN_STOCK_UNIVERSE]) {
   CATALOG_BY_SYMBOL.set(item.symbol.toUpperCase(), item);
 }
 
-// Corporate-action / demerger symbol remaps so legacy saved watchlists & holdings never 404
+// Corporate-action / demerger / ticker rename remaps so legacy saved watchlists & imported holdings resolve live
 const RETIRED_SYMBOL_REMAP: Record<string, string> = {
   'TATAMOTORS.NS': 'TMPV.NS',
   'TATAMOTORS.BO': 'TMPV.BO',
   TATAMOTORS: 'TMPV.NS',
+  'ZOMATO.NS': 'ETERNAL.NS',
+  'ZOMATO.BO': 'ETERNAL.BO',
+  ZOMATO: 'ETERNAL.NS',
+  'MINDTREE.NS': 'LTIM.NS',
+  'MINDTREE.BO': 'LTIM.BO',
+  MINDTREE: 'LTIM.NS',
+  'LTI.NS': 'LTIM.NS',
+  'LTI.BO': 'LTIM.BO',
+  LTI: 'LTIM.NS',
+  'MCDOWELL-N.NS': 'UNITDSPR.NS',
+  'MCDOWELL-N.BO': 'UNITDSPR.BO',
+  'MCDOWELL-N': 'UNITDSPR.NS',
+  'CADILAHC.NS': 'ZYDUSLIFE.NS',
+  'CADILAHC.BO': 'ZYDUSLIFE.BO',
+  CADILAHC: 'ZYDUSLIFE.NS',
+  'INFRATEL.NS': 'INDUSTOWER.NS',
+  'INFRATEL.BO': 'INDUSTOWER.BO',
+  INFRATEL: 'INDUSTOWER.NS',
+  'ADANITRANS.NS': 'ADANIENSOL.NS',
+  'ADANITRANS.BO': 'ADANIENSOL.BO',
+  ADANITRANS: 'ADANIENSOL.NS',
+  'SRTRANSFIN.NS': 'SHRIRAMFIN.NS',
+  'SRTRANSFIN.BO': 'SHRIRAMFIN.BO',
+  SRTRANSFIN: 'SHRIRAMFIN.NS',
+  'PVR.NS': 'PVRINOX.NS',
+  'PVR.BO': 'PVRINOX.BO',
+  PVR: 'PVRINOX.NS',
+  'GMRINFRA.NS': 'GMRAIRPORT.NS',
+  'GMRINFRA.BO': 'GMRAIRPORT.BO',
+  GMRINFRA: 'GMRAIRPORT.NS',
 };
 
 export function resolveActiveMarketSymbol(symbol: string): string {
@@ -183,6 +213,8 @@ interface YahooChartPayload {
   };
 }
 
+const YAHOO_HOSTS = ['https://query1.finance.yahoo.com', 'https://query2.finance.yahoo.com'];
+
 async function fetchYahooChartRaw(
   symbol: string,
   range: string,
@@ -190,21 +222,32 @@ async function fetchYahooChartRaw(
   includeDividends = false
 ): Promise<NonNullable<NonNullable<YahooChartPayload['chart']>['result']>[0] | null> {
   const eventsParam = includeDividends ? '&events=div' : '';
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+  const pathAndQuery = `/v8/finance/chart/${encodeURIComponent(
     symbol
   )}?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}&includePrePost=false${eventsParam}`;
 
-  try {
-    const res = await fetch(url, {
-      headers: YAHOO_HEADERS,
-      signal: AbortSignal.timeout(7000),
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as YahooChartPayload;
-    return json.chart?.result?.[0] ?? null;
-  } catch {
-    return null;
+  for (let attempt = 0; attempt < YAHOO_HOSTS.length; attempt++) {
+    const url = `${YAHOO_HOSTS[attempt]}${pathAndQuery}`;
+    try {
+      const res = await fetch(url, {
+        headers: YAHOO_HEADERS,
+        signal: AbortSignal.timeout(7500),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as YahooChartPayload;
+        const result = json.chart?.result?.[0] ?? null;
+        if (result) return result;
+      }
+      // Don't retry definitive 404 symbol-not-found on the second host if Yahoo returned structured 404
+      if (res.status === 404) return null;
+    } catch {
+      // Retry on alternate Yahoo host after brief backoff
+    }
+    if (attempt < YAHOO_HOSTS.length - 1) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
   }
+  return null;
 }
 
 function buildQuoteFromDailyResult(
@@ -346,22 +389,77 @@ function buildQuoteFromDailyResult(
   };
 }
 
-export async function getQuote(symbol: string): Promise<MarketQuote | null> {
+async function fetchSingleCandidateQuote(candidate: string): Promise<MarketQuote | null> {
+  const raw1y = await fetchYahooChartRaw(candidate, '1y', '1d', true);
+  if (raw1y) {
+    const parsed = buildQuoteFromDailyResult(candidate, raw1y);
+    if (parsed) return parsed;
+  }
+  // Lightweight 5d fallback handles newly listed stocks or transient 1y payload failures
+  const raw5d = await fetchYahooChartRaw(candidate, '5d', '1d', false);
+  if (raw5d) {
+    const parsed = buildQuoteFromDailyResult(candidate, raw5d);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+export async function getQuote(
+  symbol: string,
+  forceRefresh = false
+): Promise<MarketQuote | null> {
   const normalized = resolveActiveMarketSymbol(symbol);
+  if (!normalized) return null;
+
   const cached = quoteCache.get(normalized);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (!forceRefresh && cached && cached.expiresAt > Date.now()) {
     return cached.data;
   }
 
-  const raw = await fetchYahooChartRaw(normalized, '1y', '1d', true);
-  if (raw) {
-    const parsed = buildQuoteFromDailyResult(normalized, raw);
+  // Build candidate symbol list with automatic Indian exchange fallback (.NS <-> .BO)
+  const candidates: string[] = [];
+  if (normalized.startsWith('^')) {
+    candidates.push(normalized);
+  } else if (normalized.endsWith('.NS')) {
+    candidates.push(normalized, `${normalized.slice(0, -3)}.BO`);
+  } else if (normalized.endsWith('.BO')) {
+    candidates.push(normalized, `${normalized.slice(0, -3)}.NS`);
+  } else if (normalized.includes('.')) {
+    candidates.push(normalized);
+  } else {
+    // Bare ticker without suffix (e.g. RELIANCE, HDFCBANK): prefer NSE then BSE
+    candidates.push(`${normalized}.NS`, `${normalized}.BO`, normalized);
+  }
+
+  for (const cand of candidates) {
+    const parsed = await fetchSingleCandidateQuote(cand);
     if (parsed) {
-      quoteCache.set(normalized, {
-        data: parsed,
-        expiresAt: Date.now() + QUOTE_TTL_MS,
-      });
+      const entry = { data: parsed, expiresAt: Date.now() + QUOTE_TTL_MS };
+      quoteCache.set(normalized, entry);
+      quoteCache.set(parsed.symbol.toUpperCase(), entry);
       return parsed;
+    }
+  }
+
+  // Last-resort lookup via Yahoo Finance Indian search if ticker was renamed or abbreviated
+  if (!normalized.startsWith('^')) {
+    const bare = normalized.replace(/\.(NS|BO)$/, '');
+    if (bare.length >= 2) {
+      try {
+        const matches = await searchIndianStocks(bare);
+        for (const m of matches.slice(0, 2)) {
+          if (candidates.includes(m.symbol)) continue;
+          const parsed = await fetchSingleCandidateQuote(m.symbol);
+          if (parsed) {
+            const entry = { data: parsed, expiresAt: Date.now() + QUOTE_TTL_MS };
+            quoteCache.set(normalized, entry);
+            quoteCache.set(parsed.symbol.toUpperCase(), entry);
+            return parsed;
+          }
+        }
+      } catch {
+        // Ignore search fallback errors
+      }
     }
   }
 
@@ -393,19 +491,26 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
-export async function getQuotes(symbols: string[]): Promise<Record<string, MarketQuote>> {
+export async function getQuotes(
+  symbols: string[],
+  forceRefresh = false
+): Promise<Record<string, MarketQuote>> {
   const unique = Array.from(
     new Set(symbols.map((s) => s.trim().toUpperCase()).filter(Boolean))
   );
-  const fetched = await runWithConcurrency(unique, 8, async (sym) => ({
+  const fetched = await runWithConcurrency(unique, 6, async (sym) => ({
     sym,
-    quote: await getQuote(sym),
+    quote: await getQuote(sym, forceRefresh),
   }));
 
   const map: Record<string, MarketQuote> = {};
   for (const entry of fetched) {
     if (entry.quote) {
       map[entry.sym] = entry.quote;
+      const resolvedKey = entry.quote.symbol.toUpperCase();
+      if (!map[resolvedKey]) {
+        map[resolvedKey] = entry.quote;
+      }
     }
   }
   return map;

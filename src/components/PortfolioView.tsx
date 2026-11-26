@@ -9,6 +9,7 @@ import {
   Eye,
   Pencil,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Trash2,
@@ -39,6 +40,7 @@ interface PortfolioViewProps {
   onRunAiAudit: () => void;
   onPreloadDemo: () => void;
   onClearAll: () => void;
+  onRefreshQuotes?: () => void;
 }
 
 type EquitySortKey =
@@ -74,6 +76,7 @@ export function PortfolioView({
   onRunAiAudit,
   onPreloadDemo,
   onClearAll,
+  onRefreshQuotes,
 }: PortfolioViewProps) {
   const [subTab, setSubTab] = useState<'holdings' | 'dividends'>('holdings');
   const [filterText, setFilterText] = useState('');
@@ -81,8 +84,21 @@ export function PortfolioView({
   const [sectorFilter, setSectorFilter] = useState<string>('All');
   const [exchangeFilter, setExchangeFilter] = useState<'All' | 'NSE' | 'BSE'>('All');
   const [pnlFilter, setPnlFilter] = useState<'All' | 'gainers' | 'losers'>('All');
+  const [dayMoveFilter, setDayMoveFilter] = useState<'All' | 'up' | 'down'>('All');
+  const [dividendFilter, setDividendFilter] = useState<'All' | 'payers' | 'non_payers'>('All');
+  const [priceFeedFilter, setPriceFeedFilter] = useState<'All' | 'live' | 'fallback'>('All');
+  const [aiVerdictFilter, setAiVerdictFilter] = useState<'All' | 'BUY' | 'HOLD' | 'EXIT'>('All');
   const [sortKey, setSortKey] = useState<EquitySortKey>('currentValue');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // Dividend table filters & sort
+  const [divSearch, setDivSearch] = useState('');
+  const [divSectorFilter, setDivSectorFilter] = useState('All');
+  const [divYieldFilter, setDivYieldFilter] = useState<'All' | '1' | '2' | '4'>('All');
+  const [divSortKey, setDivSortKey] = useState<
+    'symbol' | 'annualDividendPerShare' | 'dividendYield' | 'yieldOnCost' | 'expectedAnnualDividend'
+  >('expectedAnnualDividend');
+  const [divSortDir, setDivSortDir] = useState<'asc' | 'desc'>('desc');
 
   const aiRatingMap = useMemo(
     () => new Map(aiRatings.map((r) => [r.symbol.toUpperCase(), r])),
@@ -94,12 +110,21 @@ export function PortfolioView({
     return ['All', ...Array.from(set).sort()];
   }, [holdings]);
 
+  const divSectorOptions = useMemo(() => {
+    const set = new Set(diagnostics.dividendPayers.map((h) => h.sector).filter(Boolean));
+    return ['All', ...Array.from(set).sort()];
+  }, [diagnostics.dividendPayers]);
+
   const hasActiveFilters =
     filterText.trim() !== '' ||
     healthFilter !== 'All' ||
     sectorFilter !== 'All' ||
     exchangeFilter !== 'All' ||
-    pnlFilter !== 'All';
+    pnlFilter !== 'All' ||
+    dayMoveFilter !== 'All' ||
+    dividendFilter !== 'All' ||
+    priceFeedFilter !== 'All' ||
+    aiVerdictFilter !== 'All';
 
   const resetFilters = () => {
     setFilterText('');
@@ -107,6 +132,19 @@ export function PortfolioView({
     setSectorFilter('All');
     setExchangeFilter('All');
     setPnlFilter('All');
+    setDayMoveFilter('All');
+    setDividendFilter('All');
+    setPriceFeedFilter('All');
+    setAiVerdictFilter('All');
+  };
+
+  const hasActiveDivFilters =
+    divSearch.trim() !== '' || divSectorFilter !== 'All' || divYieldFilter !== 'All';
+
+  const resetDivFilters = () => {
+    setDivSearch('');
+    setDivSectorFilter('All');
+    setDivYieldFilter('All');
   };
 
   const toggleSort = (key: EquitySortKey) => {
@@ -118,6 +156,17 @@ export function PortfolioView({
     }
   };
 
+  const toggleDivSort = (
+    key: 'symbol' | 'annualDividendPerShare' | 'dividendYield' | 'yieldOnCost' | 'expectedAnnualDividend'
+  ) => {
+    if (divSortKey === key) {
+      setDivSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setDivSortKey(key);
+      setDivSortDir(key === 'symbol' ? 'asc' : 'desc');
+    }
+  };
+
   const filteredHoldings = useMemo(() => {
     const q = filterText.trim().toLowerCase();
     const matched = holdings.filter((h) => {
@@ -126,6 +175,16 @@ export function PortfolioView({
       if (exchangeFilter !== 'All' && h.exchange !== exchangeFilter) return false;
       if (pnlFilter === 'gainers' && h.totalPnl < 0) return false;
       if (pnlFilter === 'losers' && h.totalPnl >= 0) return false;
+      if (dayMoveFilter === 'up' && h.dayGainPercent < 0) return false;
+      if (dayMoveFilter === 'down' && h.dayGainPercent >= 0) return false;
+      if (dividendFilter === 'payers' && h.dividendYield <= 0) return false;
+      if (dividendFilter === 'non_payers' && h.dividendYield > 0) return false;
+      if (priceFeedFilter === 'live' && !h.hasLiveQuote) return false;
+      if (priceFeedFilter === 'fallback' && h.hasLiveQuote) return false;
+      if (aiVerdictFilter !== 'All') {
+        const rating = aiRatingMap.get(h.symbol.toUpperCase())?.rating;
+        if (rating !== aiVerdictFilter) return false;
+      }
       if (!q) return true;
       return (
         h.symbol.toLowerCase().includes(q) ||
@@ -155,8 +214,44 @@ export function PortfolioView({
     sectorFilter,
     exchangeFilter,
     pnlFilter,
+    dayMoveFilter,
+    dividendFilter,
+    priceFeedFilter,
+    aiVerdictFilter,
+    aiRatingMap,
     sortKey,
     sortDir,
+  ]);
+
+  const filteredDividendPayers = useMemo(() => {
+    const q = divSearch.trim().toLowerCase();
+    const minYield = divYieldFilter === 'All' ? 0 : Number(divYieldFilter);
+    const matched = diagnostics.dividendPayers.filter((item) => {
+      if (divSectorFilter !== 'All' && item.sector !== divSectorFilter) return false;
+      if (minYield > 0 && item.dividendYield < minYield) return false;
+      if (!q) return true;
+      return (
+        item.symbol.toLowerCase().includes(q) ||
+        item.companyName.toLowerCase().includes(q) ||
+        item.sector.toLowerCase().includes(q)
+      );
+    });
+
+    return [...matched].sort((a, b) => {
+      if (divSortKey === 'symbol') {
+        const cmp = a.symbol.localeCompare(b.symbol);
+        return divSortDir === 'asc' ? cmp : -cmp;
+      }
+      const cmp = Number(a[divSortKey] ?? 0) - Number(b[divSortKey] ?? 0);
+      return divSortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [
+    diagnostics.dividendPayers,
+    divSearch,
+    divSectorFilter,
+    divYieldFilter,
+    divSortKey,
+    divSortDir,
   ]);
 
   const handleExportCsv = () => {
@@ -229,15 +324,61 @@ export function PortfolioView({
         </div>
       )}
 
+      {/* Live Quote Coverage Alert when any holding falls back to imported Avg Cost */}
+      {!loadingQuotes && diagnostics.missingQuoteSymbols.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3 text-xs text-amber-950">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold">
+                {diagnostics.missingQuoteSymbols.length}{' '}
+                {diagnostics.missingQuoteSymbols.length === 1 ? 'holding is' : 'holdings are'} using
+                imported Avg Cost (live NSE/BSE quote unavailable):{' '}
+              </span>
+              <span className="font-mono-tabular text-amber-900">
+                {diagnostics.missingQuoteSymbols.slice(0, 6).join(', ')}
+                {diagnostics.missingQuoteSymbols.length > 6
+                  ? ` +${diagnostics.missingQuoteSymbols.length - 6} more`
+                  : ''}
+              </span>
+              . Click Refresh Live Prices or edit the symbol suffix (.NS / .BO) to sync live value.
+            </div>
+          </div>
+          {onRefreshQuotes && (
+            <button
+              type="button"
+              onClick={onRefreshQuotes}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 whitespace-nowrap shrink-0"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Refresh Live Prices
+            </button>
+          )}
+        </div>
+      )}
+
       {/* 4-Column KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <div className="text-xs font-medium text-slate-500">Current Portfolio Value</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-medium text-slate-500">Current Portfolio Value</div>
+            {onRefreshQuotes && holdings.length > 0 && (
+              <button
+                type="button"
+                onClick={onRefreshQuotes}
+                disabled={loadingQuotes}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700 hover:underline disabled:opacity-50 whitespace-nowrap shrink-0"
+                title="Fetch latest live NSE/BSE prices"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingQuotes ? 'animate-spin' : ''}`} />
+                Live Sync
+              </button>
+            )}
+          </div>
           <div className="text-2xl font-bold font-mono-tabular text-slate-900 mt-1.5">
             {formatINR(diagnostics.totalCurrent)}
           </div>
           <div className="text-xs text-slate-500 mt-1 font-mono-tabular">
-            {holdings.length} active {holdings.length === 1 ? 'position' : 'positions'} · Beta{' '}
+            {diagnostics.liveQuotedCount}/{holdings.length} live quoted · Beta{' '}
             {diagnostics.weightedBeta.toFixed(2)}
           </div>
         </div>
@@ -467,6 +608,59 @@ export function PortfolioView({
                 <option value="losers">Losers Only</option>
               </select>
 
+              <select
+                value={dayMoveFilter}
+                onChange={(e) => setDayMoveFilter(e.target.value as 'All' | 'up' | 'down')}
+                aria-label="Filter by today's price move"
+                className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+              >
+                <option value="All">Today: All</option>
+                <option value="up">Up Today</option>
+                <option value="down">Down Today</option>
+              </select>
+
+              <select
+                value={dividendFilter}
+                onChange={(e) =>
+                  setDividendFilter(e.target.value as 'All' | 'payers' | 'non_payers')
+                }
+                aria-label="Filter by dividend payout"
+                className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+              >
+                <option value="All">Dividends: All</option>
+                <option value="payers">Dividend Payers</option>
+                <option value="non_payers">No Dividends</option>
+              </select>
+
+              <select
+                value={priceFeedFilter}
+                onChange={(e) =>
+                  setPriceFeedFilter(e.target.value as 'All' | 'live' | 'fallback')
+                }
+                aria-label="Filter by live quote status"
+                className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+              >
+                <option value="All">Price Feed: All</option>
+                <option value="live">Live Exchange LTP</option>
+                <option value="fallback">Est. Avg Cost Only</option>
+              </select>
+
+              {aiRatings.length > 0 && (
+                <select
+                  value={aiVerdictFilter}
+                  onChange={(e) =>
+                    setAiVerdictFilter(e.target.value as 'All' | 'BUY' | 'HOLD' | 'EXIT')
+                  }
+                  aria-label="Filter by AI rating verdict"
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                >
+                  <option value="All">AI Rating: All</option>
+                  <option value="BUY">BUY Only</option>
+                  <option value="HOLD">HOLD Only</option>
+                  <option value="EXIT">EXIT Only</option>
+                </select>
+              )}
+
               {hasActiveFilters && (
                 <button
                   type="button"
@@ -645,7 +839,15 @@ export function PortfolioView({
                             {formatINR(h.avgBuyPrice)}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono-tabular font-semibold text-slate-900">
-                            {formatINR(h.livePrice)}
+                            <div>{formatINR(h.livePrice)}</div>
+                            {!h.hasLiveQuote && (
+                              <div
+                                className="text-[10px] font-medium text-amber-700"
+                                title="Live exchange price could not be resolved; temporarily showing Avg Cost"
+                              >
+                                Est. (Avg Cost)
+                              </div>
+                            )}
                           </td>
                           <td className="py-2.5 px-3 text-right font-mono-tabular font-medium text-slate-900">
                             {formatINR(h.currentValue)}
@@ -817,53 +1019,145 @@ export function PortfolioView({
               No trailing 12-month dividend payouts detected across your current holdings.
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="relative w-56">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={divSearch}
+                    onChange={(e) => setDivSearch(e.target.value)}
+                    placeholder="Filter dividend stocks..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+                <select
+                  value={divSectorFilter}
+                  onChange={(e) => setDivSectorFilter(e.target.value)}
+                  aria-label="Filter dividend payers by sector"
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                >
+                  {divSectorOptions.map((sec) => (
+                    <option key={sec} value={sec}>
+                      Sector: {sec}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={divYieldFilter}
+                  onChange={(e) => setDivYieldFilter(e.target.value as 'All' | '1' | '2' | '4')}
+                  aria-label="Filter by minimum dividend yield"
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                >
+                  <option value="All">Yield: All</option>
+                  <option value="1">Yield &ge; 1%</option>
+                  <option value="2">Yield &ge; 2%</option>
+                  <option value="4">Yield &ge; 4%</option>
+                </select>
+                {hasActiveDivFilters && (
+                  <button
+                    type="button"
+                    onClick={resetDivFilters}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 rounded-lg whitespace-nowrap shrink-0"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Reset
+                  </button>
+                )}
+                <div className="text-xs text-slate-500 ml-auto font-mono-tabular">
+                  Showing {filteredDividendPayers.length} of {diagnostics.dividendPayers.length}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-6 items-start">
               <div className="lg:col-span-3 overflow-x-auto border border-slate-200 rounded-lg">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
-                      <th className="py-2 px-3">Stock</th>
+                      <SortableTh
+                        label="Stock"
+                        sortKey="symbol"
+                        activeKey={divSortKey}
+                        direction={divSortDir}
+                        className="px-3"
+                        onSort={toggleDivSort}
+                      />
                       <th className="py-2 px-3 text-right">Qty</th>
-                      <th className="py-2 px-3 text-right">Div / Share (TTM)</th>
-                      <th className="py-2 px-3 text-right">Yield</th>
-                      <th className="py-2 px-3 text-right">Yield on Cost</th>
-                      <th className="py-2 px-3 text-right">Expected Annual</th>
+                      <SortableTh
+                        label="Div / Share (TTM)"
+                        sortKey="annualDividendPerShare"
+                        activeKey={divSortKey}
+                        direction={divSortDir}
+                        align="right"
+                        onSort={toggleDivSort}
+                      />
+                      <SortableTh
+                        label="Yield"
+                        sortKey="dividendYield"
+                        activeKey={divSortKey}
+                        direction={divSortDir}
+                        align="right"
+                        onSort={toggleDivSort}
+                      />
+                      <SortableTh
+                        label="Yield on Cost"
+                        sortKey="yieldOnCost"
+                        activeKey={divSortKey}
+                        direction={divSortDir}
+                        align="right"
+                        onSort={toggleDivSort}
+                      />
+                      <SortableTh
+                        label="Expected Annual"
+                        sortKey="expectedAnnualDividend"
+                        activeKey={divSortKey}
+                        direction={divSortDir}
+                        align="right"
+                        onSort={toggleDivSort}
+                      />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {diagnostics.dividendPayers.map((item) => (
-                      <tr
-                        key={item.id}
-                        onClick={() => onInspectChart(item.symbol, item.avgBuyPrice)}
-                        className="hover:bg-slate-50 cursor-pointer"
-                      >
-                        <td className="py-2 px-3">
-                          <div className="font-semibold text-slate-900">
-                            {item.symbol.replace(/\.(NS|BO)$/, '')}
-                          </div>
-                          {item.lastDividendDate && (
-                            <div className="text-[10px] text-slate-500 font-mono-tabular">
-                              Last ex-date: {item.lastDividendDate}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono-tabular text-slate-700">
-                          {item.quantity}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono-tabular text-slate-800">
-                          ₹{item.annualDividendPerShare.toFixed(2)}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono-tabular text-slate-900 font-medium">
-                          {item.dividendYield.toFixed(2)}%
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono-tabular text-slate-700">
-                          {item.yieldOnCost.toFixed(2)}%
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono-tabular font-semibold text-green-700">
-                          {formatINR(item.expectedAnnualDividend)}
+                    {filteredDividendPayers.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="py-8 text-center text-xs text-slate-500">
+                          No dividend stocks match your current filters.
                         </td>
                       </tr>
-                    ))}
+                    ) : (
+                      filteredDividendPayers.map((item) => (
+                        <tr
+                          key={item.id}
+                          onClick={() => onInspectChart(item.symbol, item.avgBuyPrice)}
+                          className="hover:bg-slate-50 cursor-pointer"
+                        >
+                          <td className="py-2 px-3">
+                            <div className="font-semibold text-slate-900">
+                              {item.symbol.replace(/\.(NS|BO)$/, '')}
+                            </div>
+                            {item.lastDividendDate && (
+                              <div className="text-[10px] text-slate-500 font-mono-tabular">
+                                Last ex-date: {item.lastDividendDate}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono-tabular text-slate-700">
+                            {item.quantity}
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono-tabular text-slate-800">
+                            ₹{item.annualDividendPerShare.toFixed(2)}
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono-tabular text-slate-900 font-medium">
+                            {item.dividendYield.toFixed(2)}%
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono-tabular text-slate-700">
+                            {item.yieldOnCost.toFixed(2)}%
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono-tabular font-semibold text-green-700">
+                            {formatINR(item.expectedAnnualDividend)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -914,6 +1208,7 @@ export function PortfolioView({
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
+              </div>
               </div>
             </div>
           )}

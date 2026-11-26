@@ -177,9 +177,18 @@ export function enrichHoldings(
   const nifty6M = niftyBenchmark?.return6M ?? 4.0;
 
   const preliminary = holdings.map((h) => {
-    const quote = quotes[h.symbol];
-    const livePrice = quote?.price ?? h.avgBuyPrice;
-    const previousClose = quote?.previousClose ?? livePrice;
+    const rawSym = h.symbol.trim();
+    const upperSym = rawSym.toUpperCase();
+    const bareSym = upperSym.replace(/\.(NS|BO)$/, '');
+    const quote =
+      quotes[rawSym] ??
+      quotes[upperSym] ??
+      quotes[`${bareSym}.NS`] ??
+      quotes[`${bareSym}.BO`] ??
+      quotes[bareSym];
+    const hasLiveQuote = Boolean(quote && Number.isFinite(quote.price) && quote.price > 0);
+    const livePrice = hasLiveQuote && quote ? quote.price : h.avgBuyPrice;
+    const previousClose = hasLiveQuote && quote?.previousClose ? quote.previousClose : livePrice;
     const investedValue = h.quantity * h.avgBuyPrice;
     const currentValue = h.quantity * livePrice;
     const totalPnl = currentValue - investedValue;
@@ -236,6 +245,7 @@ export function enrichHoldings(
       yieldOnCost,
       lastDividendDate: quote?.lastDividendDate ?? null,
       quote,
+      hasLiveQuote,
       healthStatus,
       healthReason,
     };
@@ -277,6 +287,8 @@ export interface PortfolioDiagnosticsSummary {
   portfolioDividendYield: number;
   portfolioYieldOnCost: number;
   dividendPayers: EnrichedHolding[];
+  liveQuotedCount: number;
+  missingQuoteSymbols: string[];
   concentrationAlerts: Array<{
     title: string;
     detail: string;
@@ -387,6 +399,10 @@ export function computePortfolioDiagnostics(
   const dividendPayers = enriched
     .filter((h) => h.expectedAnnualDividend > 0)
     .sort((a, b) => b.expectedAnnualDividend - a.expectedAnnualDividend);
+  const liveQuotedCount = enriched.filter((h) => h.hasLiveQuote).length;
+  const missingQuoteSymbols = Array.from(
+    new Set(enriched.filter((h) => !h.hasLiveQuote).map((h) => h.symbol))
+  );
 
   return {
     totalInvested,
@@ -405,6 +421,8 @@ export function computePortfolioDiagnostics(
     portfolioDividendYield,
     portfolioYieldOnCost,
     dividendPayers,
+    liveQuotedCount,
+    missingQuoteSymbols,
     concentrationAlerts,
   };
 }

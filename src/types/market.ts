@@ -128,6 +128,7 @@ export interface EnrichedHolding extends HoldingRecord {
   yieldOnCost: number;
   lastDividendDate: string | null;
   quote?: MarketQuote;
+  hasLiveQuote: boolean;
   healthStatus: 'Healthy' | 'Watch' | 'Dead Stock';
   healthReason: string;
 }
@@ -351,6 +352,7 @@ export interface AnalyzedMutualFund {
   latestNav: number;
   previousNav: number;
   navDate: string;
+  hasLiveNav?: boolean;
   dayChangePercent: number;
   investedValue: number;
   currentValue: number;

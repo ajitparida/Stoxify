@@ -215,45 +215,57 @@ export async function fetchMfSchemeSeries(schemeCode: string): Promise<ParsedSch
     return cached.data;
   }
 
-  try {
-    const res = await fetch(`${MFAPI_BASE}/mf/${cleanCode}`, {
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const payload = (await res.json()) as MfApiSchemeResponse;
-    const meta = payload.meta ?? {};
-    const rawData = Array.isArray(payload.data) ? payload.data : [];
-    if (rawData.length === 0) return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(`${MFAPI_BASE}/mf/${cleanCode}`, {
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        if (res.status === 404) return null;
+        if (attempt === 0) {
+          await new Promise((r) => setTimeout(r, 250));
+          continue;
+        }
+        return null;
+      }
+      const payload = (await res.json()) as MfApiSchemeResponse;
+      const meta = payload.meta ?? {};
+      const rawData = Array.isArray(payload.data) ? payload.data : [];
+      if (rawData.length === 0) return null;
 
-    const points: Array<{ date: string; timestamp: number; nav: number }> = [];
-    for (const row of rawData) {
-      const iso = parseDdMmYyyyToIso(row.date);
-      const nav = Number(row.nav);
-      if (!iso || !Number.isFinite(nav) || nav <= 0) continue;
-      const ts = Date.parse(`${iso}T00:00:00Z`);
-      if (!Number.isFinite(ts)) continue;
-      points.push({ date: iso, timestamp: ts, nav: Number(nav.toFixed(4)) });
+      const points: Array<{ date: string; timestamp: number; nav: number }> = [];
+      for (const row of rawData) {
+        const iso = parseDdMmYyyyToIso(row.date);
+        const nav = Number(row.nav);
+        if (!iso || !Number.isFinite(nav) || nav <= 0) continue;
+        const ts = Date.parse(`${iso}T00:00:00Z`);
+        if (!Number.isFinite(ts)) continue;
+        points.push({ date: iso, timestamp: ts, nav: Number(nav.toFixed(4)) });
+      }
+
+      points.sort((a, b) => a.timestamp - b.timestamp);
+      if (points.length === 0) return null;
+
+      const schemeName = meta.scheme_name || `Scheme ${cleanCode}`;
+      const series: ParsedSchemeSeries = {
+        schemeCode: cleanCode,
+        schemeName,
+        fundHouse: meta.fund_house || 'Indian Mutual Fund',
+        category: normalizeCategoryLabel(meta.scheme_category || '', schemeName),
+        planType: detectPlanType(schemeName),
+        optionType: detectOptionType(schemeName),
+        points,
+      };
+
+      schemeCache.set(cleanCode, { expiresAt: Date.now() + 6 * 60 * 60 * 1000, data: series });
+      return series;
+    } catch {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
     }
-
-    points.sort((a, b) => a.timestamp - b.timestamp);
-    if (points.length === 0) return null;
-
-    const schemeName = meta.scheme_name || `Scheme ${cleanCode}`;
-    const series: ParsedSchemeSeries = {
-      schemeCode: cleanCode,
-      schemeName,
-      fundHouse: meta.fund_house || 'Indian Mutual Fund',
-      category: normalizeCategoryLabel(meta.scheme_category || '', schemeName),
-      planType: detectPlanType(schemeName),
-      optionType: detectOptionType(schemeName),
-      points,
-    };
-
-    schemeCache.set(cleanCode, { expiresAt: Date.now() + 6 * 60 * 60 * 1000, data: series });
-    return series;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 interface TriBenchmarkSpec {
@@ -1231,6 +1243,7 @@ export async function analyzeMutualFundPortfolio(params: {
       latestNav,
       previousNav,
       navDate,
+      hasLiveNav: points.length > 0,
       dayChangePercent,
       investedValue,
       currentValue,

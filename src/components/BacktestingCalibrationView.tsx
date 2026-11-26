@@ -27,6 +27,7 @@ import {
   LineChart as LineChartIcon,
   Play,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Target,
@@ -210,15 +211,25 @@ export function BacktestingCalibrationView({
   // Scorecard filters
   const [scorecardSearch, setScorecardSearch] = useState('');
   const [edgeFilter, setEdgeFilter] = useState<'ALL' | StockEdgeTier>('ALL');
+  const [scorecardSectorFilter, setScorecardSectorFilter] = useState<string>('ALL');
+  const [scorecardWinFilter, setScorecardWinFilter] = useState<'ALL' | 'high' | 'mid' | 'low'>('ALL');
+  const [scorecardExcessFilter, setScorecardExcessFilter] = useState<'ALL' | 'beat' | 'lag'>('ALL');
   const [portfolioOnlyScorecard, setPortfolioOnlyScorecard] = useState(false);
   const [sortKey, setSortKey] = useState<ScorecardSortKey>('avgExcessReturn3M');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
+  // Data quality table filters
+  const [dqSearch, setDqSearch] = useState('');
+  const [dqStatusFilter, setDqStatusFilter] = useState<'ALL' | 'OK' | 'PARTIAL_HISTORY' | 'UNAVAILABLE'>('ALL');
+
   // Signals table filters
+  const [signalSearch, setSignalSearch] = useState('');
   const [signalSymbolFilter, setSignalSymbolFilter] = useState<string>('ALL');
   const [signalVerdictFilter, setSignalVerdictFilter] = useState<'ALL' | AiRatingVerdict>('ALL');
   const [signalStatusFilter, setSignalStatusFilter] = useState<'ALL' | BacktestOutcomeStatus>('ALL');
   const [signalSplitFilter, setSignalSplitFilter] = useState<'ALL' | 'TRAIN' | 'OOS'>('ALL');
+  const [signalConfFilter, setSignalConfFilter] = useState<'ALL' | '75plus' | '65_75' | '55_65' | 'under55'>('ALL');
+  const [signalReturnFilter, setSignalReturnFilter] = useState<'ALL' | 'winners' | 'losers' | 'beat_nifty'>('ALL');
   const [signalsPage, setSignalsPage] = useState(1);
   const SIGNALS_PAGE_SIZE = 25;
 
@@ -334,13 +345,48 @@ export function BacktestingCalibrationView({
     });
   }, [activeCalibration]);
 
+  const scorecardSectorOptions = useMemo(() => {
+    if (!runResult) return ['ALL'];
+    const set = new Set(runResult.stockScorecards.map((s) => s.sector).filter(Boolean));
+    return ['ALL', ...Array.from(set).sort()];
+  }, [runResult]);
+
+  const hasActiveScorecardFilters =
+    scorecardSearch.trim() !== '' ||
+    edgeFilter !== 'ALL' ||
+    scorecardSectorFilter !== 'ALL' ||
+    scorecardWinFilter !== 'ALL' ||
+    scorecardExcessFilter !== 'ALL' ||
+    portfolioOnlyScorecard;
+
+  const resetScorecardFilters = () => {
+    setScorecardSearch('');
+    setEdgeFilter('ALL');
+    setScorecardSectorFilter('ALL');
+    setScorecardWinFilter('ALL');
+    setScorecardExcessFilter('ALL');
+    setPortfolioOnlyScorecard(false);
+  };
+
   // Filtered & sorted stock scorecards
   const filteredScorecards = useMemo(() => {
     if (!runResult) return [];
     const q = scorecardSearch.trim().toLowerCase();
     const list = runResult.stockScorecards.filter((s) => {
       if (edgeFilter !== 'ALL' && s.edgeTier !== edgeFilter) return false;
+      if (scorecardSectorFilter !== 'ALL' && s.sector !== scorecardSectorFilter) return false;
       if (portfolioOnlyScorecard && !s.inUserPortfolio) return false;
+      if (scorecardWinFilter !== 'ALL') {
+        if (s.winRate3M === null) return false;
+        if (scorecardWinFilter === 'high' && s.winRate3M < 60) return false;
+        if (scorecardWinFilter === 'mid' && (s.winRate3M < 50 || s.winRate3M >= 60)) return false;
+        if (scorecardWinFilter === 'low' && s.winRate3M >= 50) return false;
+      }
+      if (scorecardExcessFilter !== 'ALL') {
+        if (s.avgExcessReturn3M === null) return false;
+        if (scorecardExcessFilter === 'beat' && s.avgExcessReturn3M < 0) return false;
+        if (scorecardExcessFilter === 'lag' && s.avgExcessReturn3M >= 0) return false;
+      }
       if (
         q &&
         !s.ticker.toLowerCase().includes(q) &&
@@ -362,7 +408,31 @@ export function BacktestingCalibrationView({
       const bv = (b[sortKey] as number | null) ?? -9999;
       return sortDir === 'asc' ? av - bv : bv - av;
     });
-  }, [runResult, scorecardSearch, edgeFilter, portfolioOnlyScorecard, sortKey, sortDir]);
+  }, [
+    runResult,
+    scorecardSearch,
+    edgeFilter,
+    scorecardSectorFilter,
+    scorecardWinFilter,
+    scorecardExcessFilter,
+    portfolioOnlyScorecard,
+    sortKey,
+    sortDir,
+  ]);
+
+  const filteredDataQuality = useMemo(() => {
+    if (!runResult) return [];
+    const q = dqSearch.trim().toLowerCase();
+    return runResult.dataQuality.filter((item) => {
+      if (dqStatusFilter !== 'ALL' && item.status !== dqStatusFilter) return false;
+      if (!q) return true;
+      return (
+        item.ticker.toLowerCase().includes(q) ||
+        item.symbol.toLowerCase().includes(q) ||
+        (item.note || '').toLowerCase().includes(q)
+      );
+    });
+  }, [runResult, dqSearch, dqStatusFilter]);
 
   const toggleSort = (key: ScorecardSortKey) => {
     if (sortKey === key) {
@@ -373,27 +443,77 @@ export function BacktestingCalibrationView({
     }
   };
 
+  const hasActiveSignalFilters =
+    signalSearch.trim() !== '' ||
+    signalSymbolFilter !== 'ALL' ||
+    signalVerdictFilter !== 'ALL' ||
+    signalStatusFilter !== 'ALL' ||
+    signalSplitFilter !== 'ALL' ||
+    signalConfFilter !== 'ALL' ||
+    signalReturnFilter !== 'ALL';
+
+  const resetSignalFilters = () => {
+    setSignalSearch('');
+    setSignalSymbolFilter('ALL');
+    setSignalVerdictFilter('ALL');
+    setSignalStatusFilter('ALL');
+    setSignalSplitFilter('ALL');
+    setSignalConfFilter('ALL');
+    setSignalReturnFilter('ALL');
+    setSignalsPage(1);
+  };
+
   // Filtered signals for audit table
   const filteredSignals = useMemo(() => {
     if (!runResult) return [];
     const hKey = String(selectedHorizon);
+    const q = signalSearch.trim().toLowerCase();
     return runResult.signals.filter((s) => {
       if (signalSymbolFilter !== 'ALL' && s.symbol.toUpperCase() !== signalSymbolFilter) return false;
       if (signalVerdictFilter !== 'ALL' && s.verdict !== signalVerdictFilter) return false;
       if (signalSplitFilter !== 'ALL' && s.split !== signalSplitFilter) return false;
+      const out = s.outcomes[hKey];
       if (signalStatusFilter !== 'ALL') {
-        const st = s.outcomes[hKey]?.status;
-        if (st !== signalStatusFilter) return false;
+        if (out?.status !== signalStatusFilter) return false;
+      }
+      if (signalConfFilter !== 'ALL') {
+        if (signalConfFilter === '75plus' && s.rawConfidence < 75) return false;
+        if (signalConfFilter === '65_75' && (s.rawConfidence < 65 || s.rawConfidence >= 75)) return false;
+        if (signalConfFilter === '55_65' && (s.rawConfidence < 55 || s.rawConfidence >= 65)) return false;
+        if (signalConfFilter === 'under55' && s.rawConfidence >= 55) return false;
+      }
+      if (signalReturnFilter !== 'ALL') {
+        if (!out) return false;
+        if (signalReturnFilter === 'winners' && (out.netTotalReturnPct === null || out.netTotalReturnPct <= 0)) {
+          return false;
+        }
+        if (signalReturnFilter === 'losers' && (out.netTotalReturnPct === null || out.netTotalReturnPct >= 0)) {
+          return false;
+        }
+        if (signalReturnFilter === 'beat_nifty' && (out.excessReturnPct === null || out.excessReturnPct <= 0)) {
+          return false;
+        }
+      }
+      if (
+        q &&
+        !s.ticker.toLowerCase().includes(q) &&
+        !s.companyName.toLowerCase().includes(q) &&
+        !s.signalDate.includes(q)
+      ) {
+        return false;
       }
       return true;
     });
   }, [
     runResult,
     selectedHorizon,
+    signalSearch,
     signalSymbolFilter,
     signalVerdictFilter,
     signalStatusFilter,
     signalSplitFilter,
+    signalConfFilter,
+    signalReturnFilter,
   ]);
 
   const totalSignalPages = Math.max(1, Math.ceil(filteredSignals.length / SIGNALS_PAGE_SIZE));
@@ -1132,6 +1252,48 @@ export function BacktestingCalibrationView({
                       <span className="font-semibold text-slate-900">Methodology Disclosure: </span>
                       {runResult.methodologyNote}
                     </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative w-52">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={dqSearch}
+                          onChange={(e) => setDqSearch(e.target.value)}
+                          placeholder="Filter symbol or note..."
+                          className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
+                        />
+                      </div>
+                      <select
+                        value={dqStatusFilter}
+                        onChange={(e) =>
+                          setDqStatusFilter(
+                            e.target.value as 'ALL' | 'OK' | 'PARTIAL_HISTORY' | 'UNAVAILABLE'
+                          )
+                        }
+                        aria-label="Filter data quality by status"
+                        className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                      >
+                        <option value="ALL">Status: All</option>
+                        <option value="OK">OK</option>
+                        <option value="PARTIAL_HISTORY">Partial History</option>
+                        <option value="UNAVAILABLE">Unavailable</option>
+                      </select>
+                      {(dqSearch.trim() !== '' || dqStatusFilter !== 'ALL') && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDqSearch('');
+                            setDqStatusFilter('ALL');
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 rounded-lg whitespace-nowrap shrink-0"
+                        >
+                          <RotateCcw className="w-3 h-3" /> Reset
+                        </button>
+                      )}
+                      <span className="text-xs font-mono-tabular text-slate-500 ml-auto">
+                        Showing {filteredDataQuality.length} of {runResult.dataQuality.length}
+                      </span>
+                    </div>
                     <div className="overflow-x-auto max-h-72">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
@@ -1145,7 +1307,7 @@ export function BacktestingCalibrationView({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {runResult.dataQuality.map((q) => (
+                          {filteredDataQuality.map((q) => (
                             <tr key={q.symbol}>
                               <td className="py-2 px-3 font-mono-tabular font-semibold text-slate-900">
                                 {q.ticker}
@@ -1199,22 +1361,60 @@ export function BacktestingCalibrationView({
                       value={scorecardSearch}
                       onChange={(e) => setScorecardSearch(e.target.value)}
                       placeholder="Filter symbol or sector..."
-                      className="pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600 w-52"
+                      className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600 w-48"
                     />
                   </div>
                   <select
                     value={edgeFilter}
                     onChange={(e) => setEdgeFilter(e.target.value as 'ALL' | StockEdgeTier)}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-700"
+                    aria-label="Filter by 10Y edge tier"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
                   >
-                    <option value="ALL">All Edge Tiers</option>
+                    <option value="ALL">Edge: All</option>
                     <option value="Strong">Strong Edge</option>
                     <option value="Moderate">Moderate Edge</option>
                     <option value="Neutral">Neutral</option>
                     <option value="Weak">Weak Edge</option>
                   </select>
+                  <select
+                    value={scorecardSectorFilter}
+                    onChange={(e) => setScorecardSectorFilter(e.target.value)}
+                    aria-label="Filter scorecard by sector"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                  >
+                    {scorecardSectorOptions.map((sec) => (
+                      <option key={sec} value={sec}>
+                        Sector: {sec === 'ALL' ? 'All' : sec}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={scorecardWinFilter}
+                    onChange={(e) =>
+                      setScorecardWinFilter(e.target.value as 'ALL' | 'high' | 'mid' | 'low')
+                    }
+                    aria-label="Filter by 3M win rate"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                  >
+                    <option value="ALL">3M Win %: All</option>
+                    <option value="high">High (&ge; 60%)</option>
+                    <option value="mid">Mid (50–60%)</option>
+                    <option value="low">Low (&lt; 50%)</option>
+                  </select>
+                  <select
+                    value={scorecardExcessFilter}
+                    onChange={(e) =>
+                      setScorecardExcessFilter(e.target.value as 'ALL' | 'beat' | 'lag')
+                    }
+                    aria-label="Filter by excess return vs Nifty"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                  >
+                    <option value="ALL">vs Nifty: All</option>
+                    <option value="beat">Beat Nifty (&gt;0%)</option>
+                    <option value="lag">Lagged Nifty (&lt;0%)</option>
+                  </select>
                   {portfolioSymbols.length > 0 && (
-                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 px-2 py-1.5 border border-slate-200 rounded-lg cursor-pointer">
+                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-700 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer whitespace-nowrap">
                       <input
                         type="checkbox"
                         checked={portfolioOnlyScorecard}
@@ -1224,16 +1424,30 @@ export function BacktestingCalibrationView({
                       My Portfolio Only
                     </label>
                   )}
+                  {hasActiveScorecardFilters && (
+                    <button
+                      type="button"
+                      onClick={resetScorecardFilters}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 rounded-lg whitespace-nowrap shrink-0"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Reset
+                    </button>
+                  )}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={handleExportScorecardCsv}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 text-slate-800 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Export Scorecard CSV
-                </button>
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <span className="text-xs font-mono-tabular text-slate-500">
+                    {filteredScorecards.length} of {runResult.stockScorecards.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleExportScorecardCsv}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 text-slate-800 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Export CSV
+                  </button>
+                </div>
               </div>
 
               <div className="overflow-x-auto">
@@ -1668,13 +1882,27 @@ export function BacktestingCalibrationView({
             <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
               <div className="p-4 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={signalSearch}
+                      onChange={(e) => {
+                        setSignalSearch(e.target.value);
+                        setSignalsPage(1);
+                      }}
+                      placeholder="Search stock or date..."
+                      className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600 w-44"
+                    />
+                  </div>
+
                   <select
                     value={signalSymbolFilter}
                     onChange={(e) => {
                       setSignalSymbolFilter(e.target.value);
                       setSignalsPage(1);
                     }}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                   >
                     <option value="ALL">All Stocks ({runResult.symbolsEvaluated.length})</option>
                     {runResult.stockScorecards.map((s) => (
@@ -1690,9 +1918,9 @@ export function BacktestingCalibrationView({
                       setSignalVerdictFilter(e.target.value as 'ALL' | AiRatingVerdict);
                       setSignalsPage(1);
                     }}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                   >
-                    <option value="ALL">All Verdicts</option>
+                    <option value="ALL">Verdict: All</option>
                     <option value="BUY">BUY Only</option>
                     <option value="HOLD">HOLD Only</option>
                     <option value="EXIT">EXIT Only</option>
@@ -1704,9 +1932,9 @@ export function BacktestingCalibrationView({
                       setSignalStatusFilter(e.target.value as 'ALL' | BacktestOutcomeStatus);
                       setSignalsPage(1);
                     }}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                   >
-                    <option value="ALL">All Outcomes</option>
+                    <option value="ALL">Outcome: All</option>
                     <option value="TARGET_HIT">Target Hit</option>
                     <option value="STOP_HIT">Stop Hit</option>
                     <option value="BOTH_SAME_BAR">Same-Bar (Stop First)</option>
@@ -1720,12 +1948,57 @@ export function BacktestingCalibrationView({
                       setSignalSplitFilter(e.target.value as 'ALL' | 'TRAIN' | 'OOS');
                       setSignalsPage(1);
                     }}
-                    className="px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
                   >
-                    <option value="ALL">Train + OOS</option>
+                    <option value="ALL">Split: Train + OOS</option>
                     <option value="OOS">OOS (2024–2026)</option>
                     <option value="TRAIN">Train (≤2023)</option>
                   </select>
+
+                  <select
+                    value={signalConfFilter}
+                    onChange={(e) => {
+                      setSignalConfFilter(
+                        e.target.value as 'ALL' | '75plus' | '65_75' | '55_65' | 'under55'
+                      );
+                      setSignalsPage(1);
+                    }}
+                    aria-label="Filter by raw confidence score"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                  >
+                    <option value="ALL">Confidence: All</option>
+                    <option value="75plus">&ge; 75% High</option>
+                    <option value="65_75">65–75% Strong</option>
+                    <option value="55_65">55–65% Neutral</option>
+                    <option value="under55">&lt; 55% Weak</option>
+                  </select>
+
+                  <select
+                    value={signalReturnFilter}
+                    onChange={(e) => {
+                      setSignalReturnFilter(
+                        e.target.value as 'ALL' | 'winners' | 'losers' | 'beat_nifty'
+                      );
+                      setSignalsPage(1);
+                    }}
+                    aria-label="Filter by realized return"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800"
+                  >
+                    <option value="ALL">Return: All</option>
+                    <option value="winners">Winners (&gt;0%)</option>
+                    <option value="losers">Losers (&lt;0%)</option>
+                    <option value="beat_nifty">Beat Nifty</option>
+                  </select>
+
+                  {hasActiveSignalFilters && (
+                    <button
+                      type="button"
+                      onClick={resetSignalFilters}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 rounded-lg whitespace-nowrap shrink-0"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Reset
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
@@ -1738,7 +2011,7 @@ export function BacktestingCalibrationView({
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 text-slate-800 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Export Signals CSV
+                    Export CSV
                   </button>
                 </div>
               </div>

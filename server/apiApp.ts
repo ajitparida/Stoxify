@@ -75,6 +75,7 @@ export function createApiApp(): Express {
   app.get('/api/market/quotes', async (req, res) => {
     try {
       const raw = String(req.query.symbols ?? '');
+      const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
       const symbols = raw
         .split(',')
         .map((s) => s.trim())
@@ -86,7 +87,7 @@ export function createApiApp(): Express {
         return;
       }
 
-      const quotes = await getQuotes(symbols);
+      const quotes = await getQuotes(symbols, forceRefresh);
       res.json({ quotes, fetchedAt: new Date().toISOString() });
     } catch (error) {
       console.error('Quotes endpoint error:', error);

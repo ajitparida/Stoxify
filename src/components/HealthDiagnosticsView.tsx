@@ -8,6 +8,8 @@ import {
   PieChart as PieChartIcon,
   Plus,
   RefreshCw,
+  RotateCcw,
+  Search,
   ShieldAlert,
   Sparkles,
   Star,
@@ -111,6 +113,9 @@ export function HealthDiagnosticsView({
 }: HealthDiagnosticsViewProps) {
   const [internalTab, setInternalTab] = useState<DiagnosticsSubTab>('audit');
   const [verdictFilter, setVerdictFilter] = useState<'ALL' | 'BUY' | 'HOLD' | 'EXIT'>('ALL');
+  const [auditSearch, setAuditSearch] = useState('');
+  const [convictionFilter, setConvictionFilter] = useState<'ALL' | 'High' | 'Medium' | 'Low'>('ALL');
+  const [auditEdgeFilter, setAuditEdgeFilter] = useState<'ALL' | 'strong_edge' | 'flagged'>('ALL');
   const currentTab = activeSubTab ?? internalTab;
   const setTab = (next: DiagnosticsSubTab) => {
     setInternalTab(next);
@@ -120,9 +125,28 @@ export function HealthDiagnosticsView({
   const nifty6M = niftyQuote?.return6M ?? null;
   const totalEquityValue = holdings.reduce((sum, h) => sum + h.currentValue, 0);
 
-  const visibleRatings = (aiAnalysis?.ratings ?? []).filter(
-    (r) => verdictFilter === 'ALL' || r.rating === verdictFilter
-  );
+  const visibleRatings = (aiAnalysis?.ratings ?? []).filter((r) => {
+    if (verdictFilter !== 'ALL' && r.rating !== verdictFilter) return false;
+    if (convictionFilter !== 'ALL' && r.conviction !== convictionFilter) return false;
+    if (auditEdgeFilter === 'strong_edge' && r.calibration?.stockEdgeTier !== 'Strong') return false;
+    if (auditEdgeFilter === 'flagged' && r.guardrailStatus !== 'FLAGGED') return false;
+    const q = auditSearch.trim().toLowerCase();
+    if (q) {
+      const h = holdings.find((item) => item.symbol.toUpperCase() === r.symbol.toUpperCase());
+      const matches =
+        r.symbol.toLowerCase().includes(q) ||
+        (h?.companyName || '').toLowerCase().includes(q) ||
+        (h?.sector || '').toLowerCase().includes(q);
+      if (!matches) return false;
+    }
+    return true;
+  });
+
+  const hasAuditFilters =
+    verdictFilter !== 'ALL' ||
+    auditSearch.trim() !== '' ||
+    convictionFilter !== 'ALL' ||
+    auditEdgeFilter !== 'ALL';
 
   const buyCount = (aiAnalysis?.ratings ?? []).filter((r) => r.rating === 'BUY').length;
   const holdCount = (aiAnalysis?.ratings ?? []).filter((r) => r.rating === 'HOLD').length;
@@ -443,33 +467,89 @@ export function HealthDiagnosticsView({
               )}
             </div>
 
-            {/* Verdict Filter Strip */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
-                {(
-                  [
-                    { key: 'ALL', label: `All (${aiAnalysis.ratings.length})` },
-                    { key: 'BUY', label: `BUY (${buyCount})` },
-                    { key: 'HOLD', label: `HOLD (${holdCount})` },
-                    { key: 'EXIT', label: `EXIT (${exitCount})` },
-                  ] as const
-                ).map((opt) => (
+            {/* Verdict & Attribute Filter Strip */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
+                  {(
+                    [
+                      { key: 'ALL', label: `All (${aiAnalysis.ratings.length})` },
+                      { key: 'BUY', label: `BUY (${buyCount})` },
+                      { key: 'HOLD', label: `HOLD (${holdCount})` },
+                      { key: 'EXIT', label: `EXIT (${exitCount})` },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setVerdictFilter(opt.key)}
+                      className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                        verdictFilter === opt.key
+                          ? 'bg-white text-slate-900 shadow-xs font-semibold'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative w-44">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={auditSearch}
+                    onChange={(e) => setAuditSearch(e.target.value)}
+                    placeholder="Filter stock or sector..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-blue-600"
+                  />
+                </div>
+
+                <select
+                  value={convictionFilter}
+                  onChange={(e) =>
+                    setConvictionFilter(e.target.value as 'ALL' | 'High' | 'Medium' | 'Low')
+                  }
+                  aria-label="Filter by conviction level"
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                >
+                  <option value="ALL">Conviction: All</option>
+                  <option value="High">High Conviction</option>
+                  <option value="Medium">Medium Conviction</option>
+                  <option value="Low">Low Conviction</option>
+                </select>
+
+                <select
+                  value={auditEdgeFilter}
+                  onChange={(e) =>
+                    setAuditEdgeFilter(e.target.value as 'ALL' | 'strong_edge' | 'flagged')
+                  }
+                  aria-label="Filter by edge or guardrail"
+                  className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                >
+                  <option value="ALL">Signal Filter: All</option>
+                  <option value="strong_edge">Strong 10Y Edge</option>
+                  <option value="flagged">Guardrail Flagged</option>
+                </select>
+
+                {hasAuditFilters && (
                   <button
-                    key={opt.key}
                     type="button"
-                    onClick={() => setVerdictFilter(opt.key)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
-                      verdictFilter === opt.key
-                        ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
+                    onClick={() => {
+                      setVerdictFilter('ALL');
+                      setAuditSearch('');
+                      setConvictionFilter('ALL');
+                      setAuditEdgeFilter('ALL');
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 rounded-lg whitespace-nowrap shrink-0"
                   >
-                    {opt.label}
+                    <RotateCcw className="w-3 h-3" /> Reset
                   </button>
-                ))}
+                )}
               </div>
-              <div className="text-[11px] text-slate-500">
-                Verdicts &amp; conviction unified with Net Confidence Score
+
+              <div className="text-[11px] font-mono-tabular text-slate-500">
+                Showing {visibleRatings.length} of {aiAnalysis.ratings.length}
               </div>
             </div>
 

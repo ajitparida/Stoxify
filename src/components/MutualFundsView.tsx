@@ -123,6 +123,9 @@ export function MutualFundsView({
   const [ledgerFilter, setLedgerFilter] = useState<'all' | 'regular' | 'switch'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('All');
   const [sipFilter, setSipFilter] = useState<'all' | 'sip' | 'lumpsum'>('all');
+  const [gradeFilter, setGradeFilter] = useState<'All' | 'top' | 'B' | 'lagging'>('All');
+  const [mfPnlFilter, setMfPnlFilter] = useState<'All' | 'gainers' | 'losers'>('All');
+  const [amcFilter, setAmcFilter] = useState<string>('All');
   const [sortKey, setSortKey] = useState<MfSortKey>('currentValue');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [switchFilter, setSwitchFilter] = useState<
@@ -152,17 +155,33 @@ export function MutualFundsView({
     return ['All', ...Array.from(set).sort()];
   }, [funds]);
 
+  const amcOptions = useMemo(() => {
+    const set = new Set(funds.map((f) => f.holding.fundHouse).filter(Boolean));
+    return ['All', ...Array.from(set).sort()];
+  }, [funds]);
+
+  const missingNavFunds = useMemo(
+    () => funds.filter((f) => f.hasLiveNav === false),
+    [funds]
+  );
+
   const hasActiveLedgerFilters =
     filterText.trim() !== '' ||
     ledgerFilter !== 'all' ||
     categoryFilter !== 'All' ||
-    sipFilter !== 'all';
+    sipFilter !== 'all' ||
+    gradeFilter !== 'All' ||
+    mfPnlFilter !== 'All' ||
+    amcFilter !== 'All';
 
   const resetLedgerFilters = () => {
     setFilterText('');
     setLedgerFilter('all');
     setCategoryFilter('All');
     setSipFilter('all');
+    setGradeFilter('All');
+    setMfPnlFilter('All');
+    setAmcFilter('All');
   };
 
   const toggleSort = (key: MfSortKey) => {
@@ -190,6 +209,16 @@ export function MutualFundsView({
       if (categoryFilter !== 'All' && f.holding.category !== categoryFilter) return false;
       if (sipFilter === 'sip' && !f.holding.isSip) return false;
       if (sipFilter === 'lumpsum' && f.holding.isSip) return false;
+      if (gradeFilter === 'top' && f.reportCardGrade !== 'A+' && f.reportCardGrade !== 'A') {
+        return false;
+      }
+      if (gradeFilter === 'B' && f.reportCardGrade !== 'B') return false;
+      if (gradeFilter === 'lagging' && f.reportCardGrade !== 'C' && f.reportCardGrade !== 'D') {
+        return false;
+      }
+      if (mfPnlFilter === 'gainers' && f.unrealizedGain < 0) return false;
+      if (mfPnlFilter === 'losers' && f.unrealizedGain >= 0) return false;
+      if (amcFilter !== 'All' && f.holding.fundHouse !== amcFilter) return false;
       if (!q) return true;
       return (
         f.holding.schemeName.toLowerCase().includes(q) ||
@@ -238,6 +267,9 @@ export function MutualFundsView({
     ledgerFilter,
     categoryFilter,
     sipFilter,
+    gradeFilter,
+    mfPnlFilter,
+    amcFilter,
     sortKey,
     sortDir,
   ]);
@@ -557,9 +589,35 @@ export function MutualFundsView({
           <button
             type="button"
             onClick={onRefreshAnalysis}
-            className="px-3 py-1 bg-white border border-red-200 rounded-md font-medium hover:bg-red-100"
+            className="px-3 py-1 bg-white border border-red-200 rounded-md font-medium hover:bg-red-100 whitespace-nowrap shrink-0"
           >
             Retry AMFI Sync
+          </button>
+        </div>
+      )}
+
+      {!loadingAnalysis && missingNavFunds.length > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <span>
+              <span className="font-semibold">
+                {missingNavFunds.length} {missingNavFunds.length === 1 ? 'scheme' : 'schemes'} using
+                imported Avg NAV fallback:
+              </span>{' '}
+              Live AMFI NAV could not be fetched for scheme code(s){' '}
+              <span className="font-mono-tabular">
+                {missingNavFunds.map((f) => f.holding.schemeCode).join(', ')}
+              </span>
+              . Retry AMFI sync or edit the scheme code.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={onRefreshAnalysis}
+            className="px-3 py-1.5 bg-white border border-amber-300 rounded-lg font-medium hover:bg-amber-100 whitespace-nowrap shrink-0"
+          >
+            Refresh Live AMFI NAVs
           </button>
         </div>
       )}
@@ -666,6 +724,48 @@ export function MutualFundsView({
                     <option value="sip">Active SIP Only</option>
                     <option value="lumpsum">Lumpsum Only</option>
                   </select>
+
+                  <select
+                    value={gradeFilter}
+                    onChange={(e) =>
+                      setGradeFilter(e.target.value as 'All' | 'top' | 'B' | 'lagging')
+                    }
+                    aria-label="Filter by report card grade"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                  >
+                    <option value="All">Grade: All</option>
+                    <option value="top">Top Rated (A+ / A)</option>
+                    <option value="B">Average (B)</option>
+                    <option value="lagging">Lagging (C / D)</option>
+                  </select>
+
+                  <select
+                    value={mfPnlFilter}
+                    onChange={(e) =>
+                      setMfPnlFilter(e.target.value as 'All' | 'gainers' | 'losers')
+                    }
+                    aria-label="Filter by P&L status"
+                    className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700"
+                  >
+                    <option value="All">P&amp;L: All</option>
+                    <option value="gainers">Gainers Only</option>
+                    <option value="losers">Losers Only</option>
+                  </select>
+
+                  {amcOptions.length > 2 && (
+                    <select
+                      value={amcFilter}
+                      onChange={(e) => setAmcFilter(e.target.value)}
+                      aria-label="Filter by fund house AMC"
+                      className="px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 max-w-[180px]"
+                    >
+                      {amcOptions.map((amc) => (
+                        <option key={amc} value={amc}>
+                          AMC: {amc}
+                        </option>
+                      ))}
+                    </select>
+                  )}
 
                   {hasActiveLedgerFilters && (
                     <button
@@ -826,13 +926,19 @@ export function MutualFundsView({
                                 <div className="font-semibold text-slate-900">
                                   ₹{f.latestNav.toFixed(2)}
                                 </div>
-                                <div
-                                  className={`text-[10px] ${
-                                    f.dayChangePercent >= 0 ? 'text-green-700' : 'text-red-700'
-                                  }`}
-                                >
-                                  {formatPercent(f.dayChangePercent)} ({f.navDate})
-                                </div>
+                                {f.hasLiveNav === false ? (
+                                  <div className="text-[10px] font-medium text-amber-700">
+                                    Est. (Avg NAV)
+                                  </div>
+                                ) : (
+                                  <div
+                                    className={`text-[10px] ${
+                                      f.dayChangePercent >= 0 ? 'text-green-700' : 'text-red-700'
+                                    }`}
+                                  >
+                                    {formatPercent(f.dayChangePercent)} ({f.navDate})
+                                  </div>
+                                )}
                               </td>
                               <td className="py-3 px-3 text-right font-mono-tabular font-medium text-slate-900">
                                 {formatINR(f.currentValue)}

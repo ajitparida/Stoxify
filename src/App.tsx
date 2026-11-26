@@ -409,42 +409,51 @@ export default function App() {
     return Array.from(set);
   }, [activeHoldings, activeWatchlistSymbols, activeAlgoStrategies]);
 
-  const fetchQuotes = useCallback(async () => {
-    if (symbolsToPoll.length === 0) return;
-    try {
-      const symbolChunks: string[][] = [];
-      for (let i = 0; i < symbolsToPoll.length; i += 50) {
-        symbolChunks.push(symbolsToPoll.slice(i, i + 50));
+  const fetchQuotes = useCallback(
+    async (forceRefresh = false) => {
+      if (symbolsToPoll.length === 0) return;
+      if (forceRefresh) setLoadingQuotes(true);
+      try {
+        const symbolChunks: string[][] = [];
+        for (let i = 0; i < symbolsToPoll.length; i += 50) {
+          symbolChunks.push(symbolsToPoll.slice(i, i + 50));
+        }
+
+        const settled = await Promise.allSettled(
+          symbolChunks.map(async (chunk) => {
+            const refreshParam = forceRefresh ? '&refresh=1' : '';
+            const res = await fetch(
+              `/api/market/quotes?symbols=${encodeURIComponent(chunk.join(','))}${refreshParam}`
+            );
+            if (!res.ok) throw new Error('Quote refresh failed');
+            return (await res.json()) as {
+              quotes: Record<string, MarketQuote>;
+              fetchedAt: string;
+            };
+          })
+        );
+
+        const mergedQuotes: Record<string, MarketQuote> = {};
+        let latestFetchedAt: string | null = null;
+        for (const outcome of settled) {
+          if (outcome.status === 'fulfilled') {
+            Object.assign(mergedQuotes, outcome.value.quotes || {});
+            if (outcome.value.fetchedAt) latestFetchedAt = outcome.value.fetchedAt;
+          }
+        }
+
+        if (Object.keys(mergedQuotes).length > 0) {
+          setQuotes((prev) => ({ ...prev, ...mergedQuotes }));
+          setLastUpdated(latestFetchedAt ?? new Date().toISOString());
+        }
+      } catch {
+        // Keep stale quotes silently on transient polling blip
+      } finally {
+        setLoadingQuotes(false);
       }
-
-      const responses = await Promise.all(
-        symbolChunks.map(async (chunk) => {
-          const res = await fetch(
-            `/api/market/quotes?symbols=${encodeURIComponent(chunk.join(','))}`
-          );
-          if (!res.ok) throw new Error('Quote refresh failed');
-          return (await res.json()) as {
-            quotes: Record<string, MarketQuote>;
-            fetchedAt: string;
-          };
-        })
-      );
-
-      const mergedQuotes: Record<string, MarketQuote> = {};
-      let latestFetchedAt = new Date().toISOString();
-      for (const r of responses) {
-        Object.assign(mergedQuotes, r.quotes || {});
-        if (r.fetchedAt) latestFetchedAt = r.fetchedAt;
-      }
-
-      setQuotes((prev) => ({ ...prev, ...mergedQuotes }));
-      setLastUpdated(latestFetchedAt);
-    } catch {
-      // Keep stale quotes silently on transient polling blip
-    } finally {
-      setLoadingQuotes(false);
-    }
-  }, [symbolsToPoll]);
+    },
+    [symbolsToPoll]
+  );
 
   useEffect(() => {
     void fetchQuotes();
@@ -1925,6 +1934,7 @@ export default function App() {
               }}
               onPreloadDemo={() => void handlePreloadDemoEquities()}
               onClearAll={() => setClearConfirmTarget('equities')}
+              onRefreshQuotes={() => void fetchQuotes(true)}
             />
           )}
 
