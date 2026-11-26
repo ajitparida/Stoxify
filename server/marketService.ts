@@ -73,6 +73,22 @@ const RETIRED_SYMBOL_REMAP: Record<string, string> = {
   'GMRINFRA.NS': 'GMRAIRPORT.NS',
   'GMRINFRA.BO': 'GMRAIRPORT.BO',
   GMRINFRA: 'GMRAIRPORT.NS',
+  'GSPL.NS': 'GSPLTRANS.NS',
+  'GSPL.BO': 'GSPLTRANS.BO',
+  GSPL: 'GSPLTRANS.NS',
+  // Legacy safety aliases for previously sanitized NSE tickers containing '&'
+  'AREM.NS': 'ARE&M.NS',
+  'AREM.BO': 'ARE&M.BO',
+  AREM: 'ARE&M.NS',
+  'MM.NS': 'M&M.NS',
+  'MM.BO': 'M&M.BO',
+  MM: 'M&M.NS',
+  'MMFIN.NS': 'M&MFIN.NS',
+  'MMFIN.BO': 'M&MFIN.BO',
+  MMFIN: 'M&MFIN.NS',
+  'JKBANK.NS': 'J&KBANK.NS',
+  'JKBANK.BO': 'J&KBANK.BO',
+  JKBANK: 'J&KBANK.NS',
 };
 
 export function resolveActiveMarketSymbol(symbol: string): string {
@@ -813,10 +829,32 @@ export async function getLiveResearchSignals(): Promise<
   });
 }
 
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsWholeToken(haystack: string, needle: string): boolean {
+  if (!needle) return false;
+  const rx = new RegExp(`(^|[^A-Z0-9&])${escapeRegExp(needle)}([^A-Z0-9&]|$)`);
+  return rx.test(haystack);
+}
+
+function isPricePlausible(
+  livePrice: number | null | undefined,
+  expectedPrice: number | null | undefined,
+  strict = false
+): boolean {
+  if (!livePrice || livePrice <= 0) return false;
+  if (!expectedPrice || expectedPrice <= 0) return true;
+  const ratio = livePrice / expectedPrice;
+  return strict ? ratio >= 0.35 && ratio <= 2.8 : ratio >= 0.2 && ratio <= 5.0;
+}
+
 export async function resolveSymbolForScreenshot(
   rawName: string,
   guessedSymbol?: string,
-  preferredExchange: Exchange = 'NSE'
+  preferredExchange: Exchange = 'NSE',
+  expectedPrice?: number
 ): Promise<{
   symbol: string;
   name: string;
@@ -824,77 +862,177 @@ export async function resolveSymbolForScreenshot(
   sector: string;
   quote: MarketQuote | null;
 }> {
-  const candidates: string[] = [];
   const cleanGuess = (guessedSymbol ?? '').trim().toUpperCase().replace(/[^A-Z0-9.&-]/g, '');
+  const bareGuess = cleanGuess.replace(/\.(NS|BO)$/, '');
   const cleanRaw = rawName.trim().toUpperCase();
+  const bareRaw = cleanRaw.replace(/-(EQ|BE|BZ|SM|ST|GC|GS|T2T)$/i, '').replace(/\.(NS|BO)$/, '');
 
-  // 1. Check catalog by symbol, ticker, alias, or fuzzy company name
-  const catalogMatch = INDIAN_STOCK_UNIVERSE.find((s) => {
+  // 1. Exact catalog match ONLY (never loose substring matching like "GSPLTRANS".includes("LT"))
+  const exactCatalogMatch = INDIAN_STOCK_UNIVERSE.find((s) => {
     const baseTicker = s.ticker.toUpperCase();
-    if (cleanGuess && (s.symbol === cleanGuess || baseTicker === cleanGuess.replace(/\.(NS|BO)$/, ''))) {
+    if (bareGuess && (s.symbol === cleanGuess || baseTicker === bareGuess)) {
       return true;
     }
-    if (cleanRaw === baseTicker || s.name.toUpperCase().includes(cleanRaw) || cleanRaw.includes(baseTicker)) {
+    if (bareRaw && baseTicker === bareRaw) {
       return true;
     }
-    return s.aliases?.some((a) => cleanRaw.includes(a.toUpperCase()));
+    return s.aliases?.some((a) => {
+      const upperAlias = a.toUpperCase();
+      return (bareGuess && upperAlias === bareGuess) || upperAlias === bareRaw;
+    });
   });
 
-  if (catalogMatch) {
+  if (exactCatalogMatch) {
     const suffix = preferredExchange === 'BSE' ? '.BO' : '.NS';
     const targetSym =
-      preferredExchange === 'BSE' ? `${catalogMatch.ticker}.BO` : catalogMatch.symbol;
-    const q = (await getQuote(targetSym)) ?? (await getQuote(`${catalogMatch.ticker}${suffix === '.BO' ? '.NS' : '.BO'}`));
-    if (q) {
+      preferredExchange === 'BSE' ? `${exactCatalogMatch.ticker}.BO` : exactCatalogMatch.symbol;
+    const q =
+      (await getQuote(targetSym)) ??
+      (await getQuote(`${exactCatalogMatch.ticker}${suffix === '.BO' ? '.NS' : '.BO'}`));
+    if (q && isPricePlausible(q.price, expectedPrice, false)) {
       return {
         symbol: q.symbol,
-        name: catalogMatch.name,
+        name: exactCatalogMatch.name,
         exchange: q.symbol.endsWith('.BO') ? 'BSE' : 'NSE',
-        sector: catalogMatch.sector,
+        sector: exactCatalogMatch.sector,
         quote: q,
       };
     }
   }
 
-  // 2. Try direct guessed symbol with .NS / .BO
-  if (cleanGuess) {
-    const bare = cleanGuess.replace(/\.(NS|BO)$/, '');
-    if (preferredExchange === 'BSE') {
-      candidates.push(`${bare}.BO`, `${bare}.NS`);
-    } else {
-      candidates.push(`${bare}.NS`, `${bare}.BO`);
+  // 2. Direct exchange ticker lookup (.NS / .BO) BEFORE any fuzzy matching
+  const directCandidates: string[] = [];
+  const addDirectTicker = (ticker: string) => {
+    if (!ticker || /\s/.test(ticker)) return;
+    const active = resolveActiveMarketSymbol(ticker).replace(/\.(NS|BO)$/, '');
+    const pair =
+      preferredExchange === 'BSE'
+        ? [`${active}.BO`, `${active}.NS`]
+        : [`${active}.NS`, `${active}.BO`];
+    for (const sym of pair) {
+      if (!directCandidates.includes(sym)) directCandidates.push(sym);
     }
-  }
+  };
 
-  for (const sym of candidates) {
+  if (bareGuess) addDirectTicker(bareGuess);
+  if (bareRaw && /^[A-Z0-9&-]{2,24}$/.test(bareRaw)) addDirectTicker(bareRaw);
+
+  let bestDirectMismatch: {
+    symbol: string;
+    name: string;
+    exchange: Exchange;
+    sector: string;
+    quote: MarketQuote;
+  } | null = null;
+
+  for (const sym of directCandidates) {
     const q = await getQuote(sym);
-    if (q) {
+    if (!q) continue;
+    const candidateResult = {
+      symbol: q.symbol,
+      name: q.shortName,
+      exchange: (q.symbol.endsWith('.BO') ? 'BSE' : 'NSE') as Exchange,
+      sector: q.sector,
+      quote: q,
+    };
+    if (isPricePlausible(q.price, expectedPrice, false)) {
+      return candidateResult;
+    }
+    if (!bestDirectMismatch) bestDirectMismatch = candidateResult;
+  }
+
+  // 3. Word-boundary fuzzy catalog match (for company names from broker screenshots, e.g. "Larsen & Toubro")
+  const fuzzyCatalogMatch = INDIAN_STOCK_UNIVERSE.find((s) => {
+    const baseTicker = s.ticker.toUpperCase();
+    const upperName = s.name.toUpperCase();
+    if (baseTicker.length >= 4 && containsWholeToken(cleanRaw, baseTicker)) {
+      return true;
+    }
+    if (cleanRaw.length >= 5 && upperName.includes(cleanRaw)) {
+      return true;
+    }
+    return s.aliases?.some((a) => {
+      const upperAlias = a.toUpperCase();
+      return upperAlias.length >= 4 && containsWholeToken(cleanRaw, upperAlias);
+    });
+  });
+
+  if (fuzzyCatalogMatch) {
+    const suffix = preferredExchange === 'BSE' ? '.BO' : '.NS';
+    const targetSym =
+      preferredExchange === 'BSE' ? `${fuzzyCatalogMatch.ticker}.BO` : fuzzyCatalogMatch.symbol;
+    const q =
+      (await getQuote(targetSym)) ??
+      (await getQuote(`${fuzzyCatalogMatch.ticker}${suffix === '.BO' ? '.NS' : '.BO'}`));
+    if (q && isPricePlausible(q.price, expectedPrice, true)) {
       return {
         symbol: q.symbol,
-        name: q.shortName,
+        name: fuzzyCatalogMatch.name,
         exchange: q.symbol.endsWith('.BO') ? 'BSE' : 'NSE',
-        sector: q.sector,
+        sector: fuzzyCatalogMatch.sector,
         quote: q,
       };
     }
   }
 
-  // 3. Fallback to Yahoo search using raw company name
-  const searchResults = await searchIndianStocks(rawName);
-  for (const sr of searchResults.slice(0, 3)) {
+  // 4. Fallback to Yahoo search using raw company name / ticker, ranked by expectedPrice proximity
+  const searchQueries = Array.from(new Set([rawName.trim(), bareGuess].filter(Boolean)));
+  const searchPool: SearchResultItem[] = [];
+  const seenSearchSyms = new Set<string>();
+  for (const queryTerm of searchQueries) {
+    const results = await searchIndianStocks(queryTerm);
+    for (const sr of results.slice(0, 4)) {
+      if (!seenSearchSyms.has(sr.symbol)) {
+        seenSearchSyms.add(sr.symbol);
+        searchPool.push(sr);
+      }
+    }
+  }
+
+  let bestSearchCandidate: {
+    symbol: string;
+    name: string;
+    exchange: Exchange;
+    sector: string;
+    quote: MarketQuote;
+    priceDist: number;
+  } | null = null;
+
+  for (const sr of searchPool.slice(0, 5)) {
     const q = await getQuote(sr.symbol);
-    if (q) {
-      return {
+    if (!q) continue;
+    if (!isPricePlausible(q.price, expectedPrice, true)) continue;
+    const priceDist =
+      expectedPrice && expectedPrice > 0
+        ? Math.abs(q.price - expectedPrice) / expectedPrice
+        : 0;
+    if (!bestSearchCandidate || priceDist < bestSearchCandidate.priceDist) {
+      bestSearchCandidate = {
         symbol: q.symbol,
         name: sr.name,
         exchange: sr.exchange,
         sector: sr.sector,
         quote: q,
+        priceDist,
       };
     }
   }
 
-  const fallbackTicker = (cleanGuess || cleanRaw.split(/\s+/)[0] || 'UNKNOWN')
+  if (bestSearchCandidate) {
+    return {
+      symbol: bestSearchCandidate.symbol,
+      name: bestSearchCandidate.name,
+      exchange: bestSearchCandidate.exchange,
+      sector: bestSearchCandidate.sector,
+      quote: bestSearchCandidate.quote,
+    };
+  }
+
+  if (bestDirectMismatch) {
+    return bestDirectMismatch;
+  }
+
+  const fallbackTicker = (bareGuess || bareRaw.split(/\s+/)[0] || 'UNKNOWN')
     .replace(/\.(NS|BO)$/, '')
     .replace(/[^A-Z0-9&-]/g, '');
 

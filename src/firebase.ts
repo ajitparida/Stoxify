@@ -142,7 +142,7 @@ function sanitizeId(raw: string): string {
 function sanitizeSymbol(raw: string): string {
   return raw
     .toUpperCase()
-    .replace(/[^A-Z0-9_.-]/g, '')
+    .replace(/[^A-Z0-9_&.-]/g, '')
     .slice(0, 32);
 }
 

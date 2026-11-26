@@ -18,7 +18,7 @@
         "symbol": {
           "type": "string",
           "maxLength": 32,
-          "pattern": "^[A-Z0-9_\\-\\.]+$"
+          "pattern": "^[A-Z0-9_&\\-\\.]+$"
         },
         "companyName": {
           "type": "string",
@@ -93,7 +93,7 @@
         "symbol": {
           "type": "string",
           "maxLength": 32,
-          "pattern": "^[A-Z0-9_\\-\\.]+$"
+          "pattern": "^[A-Z0-9_&\\-\\.]+$"
         },
         "companyName": {
           "type": "string",
@@ -369,7 +369,7 @@
         "symbol": {
           "type": "string",
           "maxLength": 32,
-          "pattern": "^[A-Z0-9_\\-\\.]+$"
+          "pattern": "^[A-Z0-9_&\\-\\.]+$"
         },
         "side": {
           "type": "string",

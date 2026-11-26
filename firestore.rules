@@ -48,7 +48,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && isValidId(data.userId)
         && data.userId == request.auth.uid
-        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_\\-\\.]+$')
+        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_&\\-\\.]+$')
         && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 120
         && data.exchange in ['NSE', 'BSE']
         && data.sector is string && data.sector.size() >= 1 && data.sector.size() <= 64
@@ -74,7 +74,7 @@ service cloud.firestore {
         && isValidId(data.id)
         && isValidId(data.userId)
         && data.userId == request.auth.uid
-        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_\\-\\.]+$')
+        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_&\\-\\.]+$')
         && data.companyName is string && data.companyName.size() >= 1 && data.companyName.size() <= 120
         && data.exchange in ['NSE', 'BSE']
         && data.sector is string && data.sector.size() >= 1 && data.sector.size() <= 64
@@ -181,7 +181,7 @@ service cloud.firestore {
         && isValidId(data.strategyId)
         && data.userId == request.auth.uid
         && data.strategyName is string && data.strategyName.size() >= 1 && data.strategyName.size() <= 100
-        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_\\-\\.]+$')
+        && data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 && data.symbol.matches('^[A-Z0-9_&\\-\\.]+$')
         && data.side in ['BUY', 'SELL']
         && data.status in ['FILLED', 'BLOCKED_RISK_CAP', 'BLOCKED_FUNDS', 'CANCELLED']
         && data.quantity is number && data.quantity >= 0 && data.quantity <= 10000000

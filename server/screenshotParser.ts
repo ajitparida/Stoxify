@@ -160,21 +160,23 @@ export async function parsePortfolioScreenshots(
       .map(async (row, idx) => {
         const preferredExchange: Exchange =
           row.exchange?.toUpperCase() === 'BSE' ? 'BSE' : 'NSE';
-        const resolved = await resolveSymbolForScreenshot(
-          row.rawName,
-          row.guessedSymbol,
-          preferredExchange
-        );
-
         const screenshotLtp =
           typeof row.screenshotLtp === 'number' && row.screenshotLtp > 0
             ? Number(row.screenshotLtp.toFixed(2))
             : null;
+        const resolved = await resolveSymbolForScreenshot(
+          row.rawName,
+          row.guessedSymbol,
+          preferredExchange,
+          screenshotLtp ?? undefined
+        );
+
         const livePrice = resolved.quote?.price ?? null;
         const priceDeviationPct =
           screenshotLtp && livePrice
             ? Number((((livePrice - screenshotLtp) / screenshotLtp) * 100).toFixed(2))
             : null;
+        const priceAligned = priceDeviationPct === null || Math.abs(priceDeviationPct) <= 25;
 
         const conf =
           row.confidence === 'high' || row.confidence === 'medium' || row.confidence === 'low'
@@ -193,8 +195,8 @@ export async function parsePortfolioScreenshots(
           screenshotLtp,
           livePrice,
           priceDeviationPct,
-          verified: Boolean(resolved.quote),
-          confidence: resolved.quote ? conf : 'low',
+          verified: Boolean(resolved.quote) && priceAligned,
+          confidence: resolved.quote && priceAligned ? conf : 'low',
           notes: row.notes || '',
         };
       })

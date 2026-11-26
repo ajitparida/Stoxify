@@ -615,14 +615,26 @@ export default function App() {
       avgBuyPrice: number;
       buyDate: string;
       notes: string;
-    }>
+    }>,
+    options?: { replaceExisting?: boolean }
   ) => {
+    const shouldReplace = Boolean(options?.replaceExisting);
     if (user) {
+      if (shouldReplace && cloudHoldings.length > 0) {
+        await batchDeleteHoldings(
+          user.uid,
+          cloudHoldings.map((h) => h.id)
+        );
+      }
       await batchCreateHoldings(
         user.uid,
         rows.map((r) => ({ ...r, source: 'screenshot' as const }))
       );
-      showToast(`Imported ${rows.length} verified holdings to your cloud portfolio.`);
+      showToast(
+        shouldReplace
+          ? `Replaced portfolio with ${rows.length} verified holdings.`
+          : `Imported ${rows.length} verified holdings to your cloud portfolio.`
+      );
     } else {
       const mapped: HoldingRecord[] = rows.map((r, i) => ({
         ...r,
@@ -630,8 +642,12 @@ export default function App() {
         userId: 'guest',
         source: 'screenshot',
       }));
-      setGuestHoldings((prev) => [...mapped, ...prev]);
-      showToast(`Loaded ${rows.length} holdings into active workspace. Sign in to sync permanently.`);
+      setGuestHoldings((prev) => (shouldReplace ? mapped : [...mapped, ...prev]));
+      showToast(
+        shouldReplace
+          ? `Replaced session holdings with ${rows.length} verified positions.`
+          : `Loaded ${rows.length} holdings into active workspace. Sign in to sync permanently.`
+      );
     }
   };
 
@@ -2187,6 +2203,7 @@ export default function App() {
 
       <ScreenshotImportModal
         open={screenshotModalOpen}
+        existingCount={activeHoldings.length}
         onClose={() => setScreenshotModalOpen(false)}
         onImportConfirmed={handleImportScreenshotHoldings}
       />

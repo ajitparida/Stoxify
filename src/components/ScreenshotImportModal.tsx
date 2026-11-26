@@ -18,6 +18,7 @@ interface EditableParsedRow extends ParsedScreenshotHolding {
 
 interface ScreenshotImportModalProps {
   open: boolean;
+  existingCount?: number;
   onClose: () => void;
   onImportConfirmed: (
     rows: Array<{
@@ -29,7 +30,8 @@ interface ScreenshotImportModalProps {
       avgBuyPrice: number;
       buyDate: string;
       notes: string;
-    }>
+    }>,
+    options?: { replaceExisting?: boolean }
   ) => Promise<void>;
 }
 
@@ -84,6 +86,7 @@ function isCsvFile(file: File): boolean {
 
 export function ScreenshotImportModal({
   open,
+  existingCount = 0,
   onClose,
   onImportConfirmed,
 }: ScreenshotImportModalProps) {
@@ -98,6 +101,7 @@ export function ScreenshotImportModal({
   const [brokerDetected, setBrokerDetected] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [rows, setRows] = useState<EditableParsedRow[]>([]);
+  const [replaceExisting, setReplaceExisting] = useState(false);
 
   if (!open) return null;
 
@@ -192,12 +196,12 @@ export function ScreenshotImportModal({
       const data = (await res.json()) as ScreenshotParseResponse;
       setBrokerDetected(data.brokerDetected);
       setWarnings(data.warnings || []);
-      setRows(
-        (data.holdings || []).map((h) => ({
-          ...h,
-          included: true,
-        }))
-      );
+      const parsedRows = (data.holdings || []).map((h) => ({
+        ...h,
+        included: true,
+      }));
+      setRows(parsedRows);
+      setReplaceExisting(mode === 'csv' && existingCount > 0 && parsedRows.length >= 10);
       if (!data.holdings || data.holdings.length === 0) {
         setError(
           mode === 'csv'
@@ -245,7 +249,8 @@ export function ScreenshotImportModal({
           avgBuyPrice: Number(r.avgBuyPrice),
           buyDate: today,
           notes: `Imported from ${brokerDetected || 'broker'}`,
-        }))
+        })),
+        { replaceExisting: existingCount > 0 && replaceExisting }
       );
       resetAll();
       onClose();
@@ -639,41 +644,63 @@ export function ScreenshotImportModal({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50 shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
-          >
-            Cancel
-          </button>
-          {rows.length === 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50 shrink-0">
+          <div>
+            {rows.length > 0 && existingCount > 0 && (
+              <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={replaceExisting}
+                  onChange={(e) => setReplaceExisting(e.target.checked)}
+                  className="rounded border-slate-300 text-blue-700"
+                />
+                <span>
+                  Replace existing <span className="font-semibold">{existingCount}</span> holdings
+                  (recommended for full broker CSV sync)
+                </span>
+              </label>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
             <button
               type="button"
-              disabled={!canExtract || parsing}
-              onClick={() => void handleParseInput()}
-              className="px-4 py-2 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+              onClick={onClose}
+              className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50"
             >
-              {parsing
-                ? mode === 'csv'
-                  ? 'Verifying CSV Tickers...'
-                  : 'Analyzing Screenshots...'
-                : mode === 'csv'
-                ? 'Parse CSV & Verify NSE/BSE'
-                : `Extract & Fact-Check (${files.length})`}
+              Cancel
             </button>
-          ) : (
-            <button
-              type="button"
-              disabled={importing}
-              onClick={() => void handleConfirmImport()}
-              className="px-4 py-2 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 whitespace-nowrap shrink-0"
-            >
-              {importing
-                ? 'Importing...'
-                : `Import ${rows.filter((r) => r.included).length} Verified Holdings`}
-            </button>
-          )}
+            {rows.length === 0 ? (
+              <button
+                type="button"
+                disabled={!canExtract || parsing}
+                onClick={() => void handleParseInput()}
+                className="px-4 py-2 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+              >
+                {parsing
+                  ? mode === 'csv'
+                    ? 'Verifying CSV Tickers...'
+                    : 'Analyzing Screenshots...'
+                  : mode === 'csv'
+                  ? 'Parse CSV & Verify NSE/BSE'
+                  : `Extract & Fact-Check (${files.length})`}
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={importing}
+                onClick={() => void handleConfirmImport()}
+                className="px-4 py-2 text-xs font-medium text-white bg-blue-700 rounded-lg hover:bg-blue-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+              >
+                {importing
+                  ? replaceExisting && existingCount > 0
+                    ? 'Replacing Portfolio...'
+                    : 'Importing...'
+                  : replaceExisting && existingCount > 0
+                  ? `Replace with ${rows.filter((r) => r.included).length} Holdings`
+                  : `Import ${rows.filter((r) => r.included).length} Verified Holdings`}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

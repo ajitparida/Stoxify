@@ -307,6 +307,13 @@ export async function parseStockPortfolioCsv(
 
     if (avgBuy <= 0 && qty > 0 && invested > 0) {
       avgBuy = invested / qty;
+    } else if (avgBuy > 0 && qty > 0 && invested > 0) {
+      // Broker CSVs (e.g. Zerodha Kite) round Avg. cost to 2 decimals while keeping exact Invested value.
+      // Preserve 4-decimal precision from Invested / Qty when it differs purely by rounding (<= ₹0.02/share).
+      const impliedAvg = invested / qty;
+      if (Math.abs(impliedAvg - avgBuy) <= 0.02 && Math.abs(avgBuy * qty - invested) <= Math.max(2, qty * 0.02)) {
+        avgBuy = impliedAvg;
+      }
     }
 
     if (qty <= 0 || avgBuy <= 0) continue;
@@ -323,7 +330,7 @@ export async function parseStockPortfolioCsv(
       guessedSymbol: cleanedTicker,
       exchange,
       quantity: Number(qty),
-      avgBuyPrice: Number(avgBuy.toFixed(2)),
+      avgBuyPrice: Number(avgBuy.toFixed(4)),
       ltp: ltp > 0 ? Number(ltp.toFixed(2)) : 0,
       isin,
     });
@@ -340,7 +347,8 @@ export async function parseStockPortfolioCsv(
       const resolved = await resolveSymbolForScreenshot(
         item.rawName,
         item.guessedSymbol,
-        item.exchange
+        item.exchange,
+        item.ltp > 0 ? item.ltp : undefined
       );
 
       const csvLtp = item.ltp > 0 ? item.ltp : null;
@@ -349,6 +357,14 @@ export async function parseStockPortfolioCsv(
         csvLtp && livePrice
           ? Number((((livePrice - csvLtp) / csvLtp) * 100).toFixed(2))
           : null;
+
+      const absDev = priceDeviationPct !== null ? Math.abs(priceDeviationPct) : 0;
+      const priceAligned = priceDeviationPct === null || absDev <= 25;
+      if (resolved.quote && !priceAligned) {
+        warnings.push(
+          `${item.rawName} resolved to ${resolved.symbol} (₹${livePrice}) vs CSV LTP ₹${csvLtp} (${priceDeviationPct}% diff) — verify ticker before importing.`
+        );
+      }
 
       return {
         tempId: `csv_eq_${Date.now()}_${idx}`,
@@ -362,8 +378,8 @@ export async function parseStockPortfolioCsv(
         screenshotLtp: csvLtp,
         livePrice,
         priceDeviationPct,
-        verified: Boolean(resolved.quote),
-        confidence: resolved.quote ? 'high' : 'low',
+        verified: Boolean(resolved.quote) && priceAligned,
+        confidence: !resolved.quote || !priceAligned ? 'low' : absDev <= 10 ? 'high' : 'medium',
         notes: item.isin ? `CSV Import · ISIN ${item.isin}` : 'Zerodha Kite / Broker CSV Import',
       };
     }
